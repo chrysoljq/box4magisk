@@ -27,6 +27,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
+          add-to-path: true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,7 +41,7 @@ jobs:
 
       - name: Build Android arm64 binary
         env:
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_LATEST_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
         run: cargo build --release --target aarch64-linux-android
 
       - name: Upload artifact
