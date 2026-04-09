@@ -1,7 +1,7 @@
 import { exec, getPackagesInfo, listPackages, toast } from "kernelsu";
 import type { AppInfo, BoxAsyncJob, BoxAsyncJobStatus } from '@/types/box';
 
-const BRIDGE_RELATIVE_PATH = "/data/adb/box/scripts/box.webui";
+const BRIDGE_RELATIVE_PATH = "/data/adb/box/webui/main";
 
 function shellQuote(value: string) {
   return `'${value.split("'").join(`'\\''`)}'`;

@@ -2,3 +2,4 @@ ui/node_modules/
 webroot/
 .ai_memory
 *.zip
+target/
