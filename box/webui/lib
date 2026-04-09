@@ -1,0 +1,281 @@
+# box.webui 公共工具库
+# 提供 JSON 序列化、HTTP 请求、文件解压、异步任务框架等基础能力
+
+json_escape() {
+    printf '%s' "$1" | sed \
+        -e 's/\\/\\\\/g' \
+        -e 's/"/\\"/g' \
+        -e 's/\t/\\t/g' \
+        -e 's/\r/\\r/g' \
+        -e ':a;N;$!ba;s/\n/\\n/g'
+}
+
+json_bool() {
+    case "$1" in
+        1|true|TRUE|yes|YES|on|ON) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
+validate_key_name() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_]*|[0-9]*)
+            emit_error "invalid config key: $1" "${2:-unknown}"
+            ;;
+    esac
+}
+
+shell_quote_value() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\\\''/g")"
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+fetch_url() {
+    local url="$1"
+
+    if command_exists curl; then
+        curl -fsSL --connect-timeout 20 --retry 2 "$url"
+        return $?
+    fi
+
+    if command_exists wget; then
+        wget -qO- "$url"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox wget -qO- "$url"
+        return $?
+    fi
+
+    return 127
+}
+
+fetch_url_with_ua() {
+    local url="$1"
+    local user_agent="$2"
+
+    if command_exists curl; then
+        curl -fsSL --connect-timeout 20 --retry 2 -A "$user_agent" "$url"
+        return $?
+    fi
+
+    if command_exists wget; then
+        wget --user-agent="$user_agent" -qO- "$url"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox wget -U "$user_agent" -qO- "$url"
+        return $?
+    fi
+
+    return 127
+}
+
+download_to_file() {
+    local url="$1"
+    local output="$2"
+
+    if command_exists curl; then
+        curl -fL --connect-timeout 20 --retry 2 -o "$output" "$url"
+        return $?
+    fi
+
+    if command_exists wget; then
+        wget -O "$output" "$url"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox wget -O "$output" "$url"
+        return $?
+    fi
+
+    return 127
+}
+
+download_to_file_with_ua() {
+    local url="$1"
+    local output="$2"
+    local user_agent="$3"
+
+    if command_exists curl; then
+        curl -fL --connect-timeout 20 --retry 2 -A "$user_agent" -o "$output" "$url"
+        return $?
+    fi
+
+    if command_exists wget; then
+        wget --user-agent="$user_agent" -O "$output" "$url"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox wget -U "$user_agent" -O "$output" "$url"
+        return $?
+    fi
+
+    return 127
+}
+
+extract_zip_file() {
+    local archive="$1"
+    local output_dir="$2"
+
+    if command_exists unzip; then
+        unzip -oq "$archive" -d "$output_dir"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox unzip -oq "$archive" -d "$output_dir"
+        return $?
+    fi
+
+    return 127
+}
+
+extract_gzip_to_file() {
+    local archive="$1"
+    local output_file="$2"
+
+    if command_exists gzip; then
+        gzip -dc "$archive" > "$output_file"
+        return $?
+    fi
+
+    if command_exists gunzip; then
+        gunzip -c "$archive" > "$output_file"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox gunzip -c "$archive" > "$output_file"
+        return $?
+    fi
+
+    return 127
+}
+
+kernel_feature_enabled() {
+    local feature="$1"
+    local config_name="CONFIG_${feature}"
+
+    if [ -f /proc/config.gz ]; then
+        zcat /proc/config.gz 2>/dev/null | grep -qE "^${config_name}=[ym]$"
+        return $?
+    fi
+
+    return 2
+}
+
+feature_json() {
+    local name="$1"
+    local available="$2"
+    local reason="$3"
+
+    printf '{"available":%s,"reason":"%s"}' \
+        "$available" \
+        "$(json_escape "$reason")"
+}
+
+emit_error() {
+    local message="${1:-unknown error}"
+    local command="${2:-unknown}"
+    printf '{"ok":false,"command":"%s","error":"%s"}\n' \
+        "$(json_escape "$command")" \
+        "$(json_escape "$message")"
+    exit 1
+}
+
+emit_ok() {
+    local command="$1"
+    local data="$2"
+    printf '{"ok":true,"command":"%s","data":%s}\n' \
+        "$(json_escape "$command")" \
+        "${data:-null}"
+}
+
+# ── 异步任务框架 ──
+
+async_job_file() {
+    printf '%s/%s.json' "$ASYNC_JOBS_DIR" "$1"
+}
+
+async_job_write_state() {
+    local job_id="$1"
+    local kind="$2"
+    local status="$3"
+    local message="$4"
+    local error="$5"
+    local updated_at output_file
+
+    updated_at="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    output_file="$(async_job_file "$job_id")"
+    mkdir -p "$ASYNC_JOBS_DIR" || return 1
+
+    printf '{"id":"%s","kind":"%s","status":"%s","message":"%s","error":"%s","updated_at":"%s"}\n' \
+        "$(json_escape "$job_id")" \
+        "$(json_escape "$kind")" \
+        "$(json_escape "$status")" \
+        "$(json_escape "$message")" \
+        "$(json_escape "$error")" \
+        "$(json_escape "$updated_at")" > "$output_file"
+}
+
+start_async_job() {
+    local command_name="$1"
+    local kind="$2"
+    shift 2
+    local job_id
+
+    mkdir -p "$ASYNC_JOBS_DIR" || emit_error "failed to prepare async jobs directory" "$command_name"
+    job_id="$(date +%s).$$.$(printf '%s' "$kind" | tr -cs 'A-Za-z0-9._-' '_')"
+    async_job_write_state "$job_id" "$kind" "queued" "scheduled" "" \
+        || emit_error "failed to create async job" "$command_name"
+
+    nohup "$scripts" "__run-job" "$job_id" "$kind" "$@" >/dev/null 2>&1 &
+
+    emit_ok "$command_name" "{\"job_id\":\"$(json_escape "$job_id")\",\"kind\":\"$(json_escape "$kind")\",\"status\":\"queued\"}"
+}
+
+normalize_job_error() {
+    local output="$1"
+
+    printf '%s' "$output" | sed -n 's/.*"error":"\([^"]*\)".*/\1/p' | tail -n 1
+}
+
+run_async_job_target() {
+    local job_id="$1"
+    local kind="$2"
+    shift 2
+    local output="" error_message="" worker_command=""
+
+    async_job_write_state "$job_id" "$kind" "running" "running" ""
+
+    case "$kind" in
+        mihomo-subscription-add) worker_command="__sync-mihomo-subscription-add" ;;
+        mihomo-subscription-update) worker_command="__sync-mihomo-subscription-update" ;;
+        singbox-subscription-add) worker_command="__sync-singbox-subscription-add" ;;
+        singbox-subscription-update) worker_command="__sync-singbox-subscription-update" ;;
+        download-cores) worker_command="__sync-download-cores" ;;
+        *)
+            async_job_write_state "$job_id" "$kind" "error" "" "unsupported async job kind: $kind"
+            return 1
+            ;;
+    esac
+
+    output="$("$scripts" "$worker_command" "$@" 2>&1)"
+    if [ $? -eq 0 ]; then
+        async_job_write_state "$job_id" "$kind" "success" "completed" ""
+        return 0
+    fi
+
+    error_message="$(normalize_job_error "$output")"
+    [ -n "$error_message" ] || error_message="$output"
+    async_job_write_state "$job_id" "$kind" "error" "" "$error_message"
+    return 1
+}

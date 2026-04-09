@@ -1,0 +1,101 @@
+#!/system/bin/sh
+
+export PATH="/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin:$PATH:/data/data/com.termux/files/usr/bin"
+
+scripts=$(realpath "$0")
+webui_dir=$(dirname "$scripts")
+box_root=$(dirname "$webui_dir")
+scripts_dir="${box_root}/scripts"
+
+BOX_CONFIG_FILE="${scripts_dir}/box.config"
+TPROXY_CONFIG_FILE="${scripts_dir}/tproxy.conf"
+SERVICE_SCRIPT="${scripts_dir}/box.service"
+TPROXY_SCRIPT="${scripts_dir}/box.tproxy"
+MODULE_ROOT="/data/adb/modules/box4"
+MIHOMO_CONFIG_FILE="/data/adb/box/mihomo/config.yaml"
+SINGBOX_CONFIG_DIR="/data/adb/box/sing-box"
+SINGBOX_TEMPLATE_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.template.json"
+SINGBOX_ACTIVE_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.json"
+SINGBOX_SUBSCRIPTIONS_DIR="${SINGBOX_CONFIG_DIR}/subscriptions"
+LEGACY_SUBSCRIPTIONS_DIR="/data/adb/box/run/webui_subscriptions"
+ASYNC_JOBS_DIR="/data/adb/box/run/webui_jobs"
+CLASH_UA="FlClash/v0.8.92 clash-verge Platform/android"
+
+[ -n "$(magisk -v 2>/dev/null | grep lite)" ] && MODULE_ROOT="/data/adb/lite_modules/box4"
+
+# ── 加载模块 ──
+
+. "${webui_dir}/lib"
+. "${webui_dir}/config"
+. "${webui_dir}/service"
+. "${webui_dir}/subs"
+. "${webui_dir}/download"
+
+# ── 任务调度命令 ──
+
+cmd_job_status() {
+    local job_id="$1"
+    local job_file payload
+
+    [ -n "$job_id" ] || emit_error "missing job id" "job-status"
+    job_file="$(async_job_file "$job_id")"
+    [ -f "$job_file" ] || emit_error "job not found: $job_id" "job-status"
+
+    payload="$(cat "$job_file" 2>/dev/null)"
+    [ -n "$payload" ] || emit_error "failed to read job status" "job-status"
+    emit_ok "job-status" "$payload"
+}
+
+cmd_run_job() {
+    local job_id="$1"
+    local kind="$2"
+    shift 2
+
+    [ -n "$job_id" ] || exit 1
+    [ -n "$kind" ] || exit 1
+    run_async_job_target "$job_id" "$kind" "$@"
+}
+
+cmd_help() {
+    emit_ok "help" '["status","get-config","set-config KEY [VALUE]","set-number KEY VALUE","toggle KEY 0|1","service start|stop|restart|status","tproxy start|stop|restart|status","manual-mode [status|enable|disable]","check-log [LINES]","apps","set-apps whitelist|blacklist|disable [LIST]","mihomo-panel-url [HOST] [PORT] [SECRET] [http|https]","mihomo-subscriptions","mihomo-subscription-add NAME URL","mihomo-subscription-update CURRENT_NAME NEXT_NAME URL","mihomo-subscription-remove NAME","singbox-subscriptions","singbox-subscription-views","singbox-subscription-add NAME URL","singbox-subscription-update CURRENT_NAME NEXT_NAME URL","singbox-subscription-remove NAME","download-cores","job-status JOB_ID","capabilities"]'
+}
+
+# ── 路由分发 ──
+
+command="$1"
+shift 2>/dev/null || true
+
+case "$command" in
+    status) cmd_status ;;
+    get-config) cmd_get_config ;;
+    set-config) cmd_set_config "$@" ;;
+    set-number) cmd_set_number "$@" ;;
+    toggle) cmd_toggle "$@" ;;
+    service) cmd_service "$@" ;;
+    tproxy) cmd_tproxy "$@" ;;
+    manual-mode) cmd_manual_mode "$@" ;;
+    check-log) cmd_check_log "$@" ;;
+    apps) cmd_apps ;;
+    set-apps) cmd_set_apps "$@" ;;
+    mihomo-panel-url) cmd_mihomo_panel_url "$@" ;;
+    mihomo-subscriptions) cmd_mihomo_subscriptions ;;
+    mihomo-subscription-add) cmd_mihomo_subscription_add "$@" ;;
+    mihomo-subscription-update) cmd_mihomo_subscription_update "$@" ;;
+    __sync-mihomo-subscription-add) cmd_sync_mihomo_subscription_add "$@" ;;
+    __sync-mihomo-subscription-update) cmd_sync_mihomo_subscription_update "$@" ;;
+    mihomo-subscription-remove) cmd_mihomo_subscription_remove "$@" ;;
+    singbox-subscriptions) cmd_singbox_subscriptions ;;
+    singbox-subscription-views) cmd_singbox_subscription_views ;;
+    singbox-subscription-add) cmd_singbox_subscription_add "$@" ;;
+    singbox-subscription-update) cmd_singbox_subscription_update "$@" ;;
+    __sync-singbox-subscription-add) cmd_sync_singbox_subscription_add "$@" ;;
+    __sync-singbox-subscription-update) cmd_sync_singbox_subscription_update "$@" ;;
+    singbox-subscription-remove) cmd_singbox_subscription_remove "$@" ;;
+    download-cores) cmd_download_cores "$@" ;;
+    __sync-download-cores) cmd_sync_download_cores "$@" ;;
+    job-status) cmd_job_status "$@" ;;
+    __run-job) cmd_run_job "$@" ;;
+    capabilities) cmd_capabilities ;;
+    help|"") cmd_help ;;
+    *) emit_error "unsupported command: $command" "$command" ;;
+esac

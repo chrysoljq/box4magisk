@@ -1,0 +1,274 @@
+# box.webui 订阅管理
+# Mihomo / Sing-box 订阅的增删改查与数据迁移
+
+resolve_boxmanager_bin() {
+    local candidate
+
+    for candidate in \
+        "/data/adb/box/bin/boxmanager" \
+        "${scripts_dir}/../bin/boxmanager" \
+        "${scripts_dir}/../../src/boxmanager/target/debug/boxmanager"
+    do
+        [ -x "$candidate" ] && printf '%s' "$candidate" && return 0
+    done
+
+    return 1
+}
+
+run_mihomo_provider_tool() {
+    local subcommand="$1"
+    shift
+    local sync_bin output
+
+    sync_bin="$(resolve_boxmanager_bin)" || emit_error "boxmanager binary not found" "mihomo-subscriptions"
+    output="$("$sync_bin" "$subcommand" --config "$MIHOMO_CONFIG_FILE" "$@" 2>/dev/null)" \
+        || emit_error "failed to ${subcommand}" "mihomo-subscriptions"
+    printf '%s' "$output"
+}
+
+ensure_singbox_subscription_store() {
+    mkdir -p "$SINGBOX_SUBSCRIPTIONS_DIR" || return 1
+}
+
+singbox_subscription_cache_file() {
+    local name="$1"
+    local encoded
+    encoded="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '_')"
+    printf '%s/%s.txt' "$SINGBOX_SUBSCRIPTIONS_DIR" "$encoded"
+}
+
+validate_subscription_name() {
+    case "$1" in
+        ''|*$'\n'*|*$'\r'*|*$'\t'*)
+            emit_error "invalid subscription name" "${2:-subscriptions}"
+            ;;
+    esac
+}
+
+migrate_legacy_mihomo_subscriptions() {
+    local legacy_file="${LEGACY_SUBSCRIPTIONS_DIR}/mihomo.tsv"
+    local sync_bin
+
+    [ -f "$legacy_file" ] || return 0
+    if [ -f "$MIHOMO_CONFIG_FILE" ] && run_mihomo_provider_tool list-mihomo-providers >/dev/null 2>&1; then
+        return 0
+    fi
+
+    sync_bin="$(resolve_boxmanager_bin)" || return 1
+    "$sync_bin" sync-mihomo-providers \
+        --config "$MIHOMO_CONFIG_FILE" \
+        --state "$legacy_file" \
+        || return 1
+
+    rm -f "$legacy_file"
+}
+
+list_mihomo_subscriptions_json() {
+    migrate_legacy_mihomo_subscriptions || return 1
+    run_mihomo_provider_tool list-mihomo-providers
+}
+
+run_singbox_subscription_tool() {
+    local subcommand="$1"
+    shift
+    local sync_bin output
+
+    sync_bin="$(resolve_boxmanager_bin)" || emit_error "boxmanager binary not found" "singbox-subscriptions"
+    output="$("$sync_bin" "$subcommand" --config "$SINGBOX_TEMPLATE_CONFIG_FILE" "$@" 2>/dev/null)" \
+        || emit_error "failed to ${subcommand}" "singbox-subscriptions"
+    printf '%s' "$output"
+}
+
+build_singbox_runtime_config() {
+    local sync_bin output
+
+    sync_bin="$(resolve_boxmanager_bin)" || emit_error "boxmanager binary not found" "singbox-build"
+    output="$("$sync_bin" build-singbox-config \
+        --config "$SINGBOX_TEMPLATE_CONFIG_FILE" \
+        --subscriptions-dir "$SINGBOX_SUBSCRIPTIONS_DIR" \
+        --output "$SINGBOX_ACTIVE_CONFIG_FILE" 2>/dev/null)" \
+        || emit_error "failed to build sing-box config" "singbox-build"
+    printf '%s' "$output"
+}
+
+inspect_singbox_subscription_views() {
+    local sync_bin output
+
+    sync_bin="$(resolve_boxmanager_bin)" || emit_error "boxmanager binary not found" "singbox-subscriptions"
+    output="$("$sync_bin" inspect-singbox-subscriptions \
+        --config "$SINGBOX_TEMPLATE_CONFIG_FILE" \
+        --subscriptions-dir "$SINGBOX_SUBSCRIPTIONS_DIR" 2>/dev/null)" \
+        || emit_error "failed to inspect sing-box subscriptions" "singbox-subscriptions"
+    printf '%s' "$output"
+}
+
+migrate_legacy_singbox_subscriptions() {
+    local legacy_file="${LEGACY_SUBSCRIPTIONS_DIR}/sing-box.tsv"
+    [ -f "$legacy_file" ] || return 0
+
+    run_singbox_subscription_tool sync-singbox-subscriptions --state "$legacy_file" >/dev/null || return 1
+    rm -f "$legacy_file"
+}
+
+list_singbox_subscriptions_json() {
+    local entries
+    migrate_legacy_singbox_subscriptions || return 1
+    ensure_singbox_subscription_store || return 1
+    entries="$(run_singbox_subscription_tool list-singbox-subscriptions)" || return 1
+    printf '%s' "$entries"
+}
+
+save_mihomo_subscription_entry() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+
+    migrate_legacy_mihomo_subscriptions || emit_error "failed to migrate mihomo subscriptions" "mihomo-subscriptions"
+    run_mihomo_provider_tool set-mihomo-provider \
+        --current-name "$current_name" \
+        --name "$next_name" \
+        --url "$url" >/dev/null
+}
+
+remove_mihomo_subscription_entry() {
+    local name="$1"
+
+    migrate_legacy_mihomo_subscriptions || emit_error "failed to migrate mihomo subscriptions" "mihomo-subscriptions"
+    run_mihomo_provider_tool remove-mihomo-provider --name "$name" >/dev/null
+}
+
+download_singbox_subscription_cache() {
+    local name="$1"
+    local url="$2"
+    local output_file tmp_file user_agent
+
+    output_file="$(singbox_subscription_cache_file "$name")" || emit_error "failed to resolve cache path" "subscriptions"
+    tmp_file="${output_file}.tmp.$$"
+    user_agent="$CLASH_UA"
+
+    mkdir -p "$(dirname "$output_file")" || emit_error "failed to prepare cache directory" "subscriptions"
+    download_to_file_with_ua "$url" "$tmp_file" "$user_agent" || {
+        rm -f "$tmp_file"
+        emit_error "failed to download subscription: $url" "subscriptions"
+    }
+    mv "$tmp_file" "$output_file" || emit_error "failed to move cached subscription" "subscriptions"
+    printf '%s' "$output_file"
+}
+
+# ── Mihomo 订阅命令 ──
+
+cmd_mihomo_subscriptions() {
+    local data
+    data="$(list_mihomo_subscriptions_json)" || emit_error "failed to read mihomo subscriptions" "mihomo-subscriptions"
+    emit_ok "mihomo-subscriptions" "$data"
+}
+
+cmd_mihomo_subscription_add() {
+    start_async_job "mihomo-subscription-add" "mihomo-subscription-add" "$@"
+}
+
+cmd_sync_mihomo_subscription_add() {
+    local name="$1"
+    local url="$2"
+    validate_subscription_name "$name" "mihomo-subscription-add"
+    [ -n "$url" ] || emit_error "missing subscription url" "mihomo-subscription-add"
+
+    save_mihomo_subscription_entry "$name" "$name" "$url"
+    emit_ok "mihomo-subscription-add" "{\"name\":\"$(json_escape "$name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"\"}"
+}
+
+cmd_mihomo_subscription_update() {
+    start_async_job "mihomo-subscription-update" "mihomo-subscription-update" "$@"
+}
+
+cmd_sync_mihomo_subscription_update() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+
+    validate_subscription_name "$current_name" "mihomo-subscription-update"
+    validate_subscription_name "$next_name" "mihomo-subscription-update"
+    [ -n "$url" ] || emit_error "missing subscription url" "mihomo-subscription-update"
+
+    save_mihomo_subscription_entry "$current_name" "$next_name" "$url"
+    emit_ok "mihomo-subscription-update" "{\"name\":\"$(json_escape "$next_name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"\"}"
+}
+
+cmd_mihomo_subscription_remove() {
+    local name="$1"
+
+    validate_subscription_name "$name" "mihomo-subscription-remove"
+    remove_mihomo_subscription_entry "$name"
+    emit_ok "mihomo-subscription-remove" "{\"name\":\"$(json_escape "$name")\"}"
+}
+
+# ── Sing-box 订阅命令 ──
+
+cmd_singbox_subscriptions() {
+    local data
+    data="$(list_singbox_subscriptions_json)" || emit_error "failed to prepare subscription store" "singbox-subscriptions"
+    emit_ok "singbox-subscriptions" "$data"
+}
+
+cmd_singbox_subscription_views() {
+    local data
+    migrate_legacy_singbox_subscriptions || emit_error "failed to migrate sing-box subscriptions" "singbox-subscription-views"
+    ensure_singbox_subscription_store || emit_error "failed to prepare subscription cache" "singbox-subscription-views"
+    data="$(inspect_singbox_subscription_views)" || emit_error "failed to inspect sing-box subscriptions" "singbox-subscription-views"
+    emit_ok "singbox-subscription-views" "$data"
+}
+
+cmd_singbox_subscription_add() {
+    start_async_job "singbox-subscription-add" "singbox-subscription-add" "$@"
+}
+
+cmd_sync_singbox_subscription_add() {
+    local name="$1"
+    local url="$2"
+    local cache_file
+
+    validate_subscription_name "$name" "singbox-subscription-add"
+    [ -n "$url" ] || emit_error "missing subscription url" "singbox-subscription-add"
+
+    cache_file="$(download_singbox_subscription_cache "$name" "$url")" \
+        || emit_error "failed to download subscription: $url" "singbox-subscription-add"
+    run_singbox_subscription_tool set-singbox-subscription --name "$name" --url "$url" >/dev/null
+    build_singbox_runtime_config >/dev/null
+    emit_ok "singbox-subscription-add" "{\"name\":\"$(json_escape "$name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"$(json_escape "$cache_file")\"}"
+}
+
+cmd_singbox_subscription_update() {
+    start_async_job "singbox-subscription-update" "singbox-subscription-update" "$@"
+}
+
+cmd_sync_singbox_subscription_update() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+    local old_cache_file new_cache_file
+
+    validate_subscription_name "$current_name" "singbox-subscription-update"
+    validate_subscription_name "$next_name" "singbox-subscription-update"
+    [ -n "$url" ] || emit_error "missing subscription url" "singbox-subscription-update"
+
+    new_cache_file="$(download_singbox_subscription_cache "$next_name" "$url")" \
+        || emit_error "failed to download subscription: $url" "singbox-subscription-update"
+    run_singbox_subscription_tool set-singbox-subscription --current-name "$current_name" --name "$next_name" --url "$url" >/dev/null
+    if [ "$current_name" != "$next_name" ]; then
+        old_cache_file="$(singbox_subscription_cache_file "$current_name")"
+        rm -f "$old_cache_file"
+    fi
+    build_singbox_runtime_config >/dev/null
+
+    emit_ok "singbox-subscription-update" "{\"name\":\"$(json_escape "$next_name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"$(json_escape "$new_cache_file")\"}"
+}
+
+cmd_singbox_subscription_remove() {
+    local name="$1"
+
+    validate_subscription_name "$name" "singbox-subscription-remove"
+    run_singbox_subscription_tool remove-singbox-subscription --name "$name" >/dev/null
+    rm -f "$(singbox_subscription_cache_file "$name")"
+    build_singbox_runtime_config >/dev/null
+    emit_ok "singbox-subscription-remove" "{\"name\":\"$(json_escape "$name")\"}"
+}

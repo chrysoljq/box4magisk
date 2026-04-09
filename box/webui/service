@@ -1,0 +1,324 @@
+# box.webui 服务控制与系统状态
+# 管理服务起停、tproxy、手动模式、能力探测、应用分流
+
+chain_exists() {
+    local cmd="$1"
+    local table="$2"
+    local chain="$3"
+
+    command_exists "$cmd" || return 1
+    "$cmd" -t "$table" -L "$chain" >/dev/null 2>&1
+}
+
+manual_file_path() {
+    source_box_config
+    printf '%s/manual' "$box_path"
+}
+
+check_log_file_path() {
+    source_box_config
+    printf '%s/check.log' "$run_path"
+}
+
+manual_mode_enabled() {
+    [ -f "$(manual_file_path)" ]
+}
+
+module_disabled() {
+    [ -f "${MODULE_ROOT}/disable" ]
+}
+
+tproxy_running() {
+    source_tproxy_config
+
+    case "$PROXY_MODE" in
+        2)
+            chain_exists iptables nat PROXY_PREROUTING
+            return $?
+            ;;
+        *)
+            chain_exists iptables mangle PROXY_PREROUTING
+            return $?
+            ;;
+    esac
+}
+
+service_running() {
+    source_box_config
+    busybox pidof "$bin_name" >/dev/null 2>&1
+}
+
+check_log_summary_json() {
+    local check_log
+    check_log="$(check_log_file_path)"
+    local exists=false
+    local size=0
+    local modified=""
+    local preview=""
+
+    if [ -f "$check_log" ]; then
+        exists=true
+        size="$(wc -c < "$check_log" 2>/dev/null | tr -d ' ' )"
+        modified="$(busybox date -r "$check_log" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$check_log" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+        preview="$(tail -n 20 "$check_log" 2>/dev/null)"
+    fi
+
+    printf '{"path":"%s","exists":%s,"size":%s,"modified":"%s","preview":"%s"}' \
+        "$(json_escape "$check_log")" \
+        "$exists" \
+        "${size:-0}" \
+        "$(json_escape "$modified")" \
+        "$(json_escape "$preview")"
+}
+
+queue_service_action() {
+    local action="$1"
+    local request_dir="/data/adb/box/run/webui_service_queue"
+    local request_file="${request_dir}/$(date +%s).$$.${action}.req"
+
+    mkdir -p "$request_dir" || emit_error "failed to prepare request queue" "service"
+    printf '%s\n' "$action" > "$request_file" || emit_error "failed to enqueue service action" "service"
+}
+
+# ── 服务相关命令 ──
+
+cmd_status() {
+    source_all_configs
+
+    local running=false
+    local pid=""
+    local manual_mode=false
+    local module_is_disabled=false
+    local autostart_enabled=true
+    local manager_control_enabled=true
+    local transparent_proxy_running=false
+
+    if service_running; then
+        running=true
+        pid="$(busybox pidof "$bin_name" 2>/dev/null | awk '{print $1}')"
+    fi
+
+    if manual_mode_enabled; then
+        manual_mode=true
+        autostart_enabled=false
+        manager_control_enabled=false
+    fi
+
+    if module_disabled; then
+        module_is_disabled=true
+        autostart_enabled=false
+        manager_control_enabled=false
+    fi
+
+    if tproxy_running; then
+        transparent_proxy_running=true
+    fi
+
+    emit_ok "status" "$(cat <<EOF
+{"running":$running,"pid":"$(json_escape "$pid")","bin_name":"$(json_escape "$bin_name")","proxy_mode":$PROXY_MODE,"app_proxy_enable":$(json_bool "$APP_PROXY_ENABLE"),"app_proxy_mode":"$(json_escape "$APP_PROXY_MODE")","clash_api_port":"$(json_escape "$clash_api_port")","clash_api_secret":"$(json_escape "$clash_api_secret")","box_config_file":"$(json_escape "$BOX_CONFIG_FILE")","tproxy_config_file":"$(json_escape "$TPROXY_CONFIG_FILE")","module_root":"$(json_escape "$MODULE_ROOT")","manual_mode":$manual_mode,"module_disabled":$module_is_disabled,"autostart_enabled":$autostart_enabled,"manager_control_enabled":$manager_control_enabled,"transparent_proxy_running":$transparent_proxy_running}
+EOF
+)"
+}
+
+cmd_capabilities() {
+    local ipset_cmd=true
+    local config_gz=true
+    local tproxy=true
+    local ipset_kernel=true
+    local xt_set=true
+    local ip6_nat=true
+    local ip6_redirect=true
+    local tproxy_reason="ok"
+    local cn_ip_reason="ok"
+    local ipv6_redirect_reason="ok"
+
+    if ! command_exists ipset; then
+        ipset_cmd=false
+    fi
+
+    if [ ! -f /proc/config.gz ]; then
+        config_gz=false
+        tproxy=false
+        ipset_kernel=false
+        xt_set=false
+        ip6_nat=false
+        ip6_redirect=false
+        tproxy_reason="/proc/config.gz not available"
+        cn_ip_reason="/proc/config.gz not available"
+        ipv6_redirect_reason="/proc/config.gz not available"
+    else
+        kernel_feature_enabled "NETFILTER_XT_TARGET_TPROXY" || {
+            tproxy=false
+            tproxy_reason="CONFIG_NETFILTER_XT_TARGET_TPROXY missing"
+        }
+        kernel_feature_enabled "IP_SET" || ipset_kernel=false
+        kernel_feature_enabled "NETFILTER_XT_SET" || xt_set=false
+        kernel_feature_enabled "IP6_NF_NAT" || ip6_nat=false
+        kernel_feature_enabled "IP6_NF_TARGET_REDIRECT" || ip6_redirect=false
+
+        if [ "$ipset_kernel" != true ] || [ "$xt_set" != true ]; then
+            cn_ip_reason="CONFIG_IP_SET or CONFIG_NETFILTER_XT_SET missing"
+        fi
+        if [ "$ip6_nat" != true ] || [ "$ip6_redirect" != true ]; then
+            ipv6_redirect_reason="CONFIG_IP6_NF_NAT or CONFIG_IP6_NF_TARGET_REDIRECT missing"
+        fi
+    fi
+
+    if [ "$ipset_cmd" != true ] && [ "$cn_ip_reason" = "ok" ]; then
+        cn_ip_reason="ipset command not found"
+    fi
+
+    emit_ok "capabilities" "$(cat <<EOF
+{"commands":{"ipset":$ipset_cmd},"kernel":{"config_gz":$config_gz,"tproxy":$tproxy,"ip_set":$ipset_kernel,"xt_set":$xt_set,"ip6_nf_nat":$ip6_nat,"ip6_nf_target_redirect":$ip6_redirect},"features":{"BYPASS_CN_IP":$(feature_json "BYPASS_CN_IP" "$( [ "$ipset_cmd" = true ] && [ "$ipset_kernel" = true ] && [ "$xt_set" = true ] && printf true || printf false )" "$cn_ip_reason"),"TPROXY":$(feature_json "TPROXY" "$tproxy" "$tproxy_reason"),"IPV6_REDIRECT":$(feature_json "IPV6_REDIRECT" "$( [ "$ip6_nat" = true ] && [ "$ip6_redirect" = true ] && printf true || printf false )" "$ipv6_redirect_reason")}}
+EOF
+)"
+}
+
+cmd_service() {
+    local action="$1"
+
+    case "$action" in
+        start|stop|restart|status) ;;
+        *) emit_error "unsupported service action: $action" "service" ;;
+    esac
+
+    if [ "$action" = "start" ] || [ "$action" = "restart" ]; then
+        queue_service_action "$action"
+        emit_ok "service" "{\"action\":\"$(json_escape "$action")\",\"async\":true,\"output\":\"scheduled\"}"
+        return 0
+    fi
+
+    local output
+    output="$("$SERVICE_SCRIPT" "$action" 2>&1)"
+    local exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        emit_error "$output" "service"
+    fi
+
+    emit_ok "service" "{\"action\":\"$(json_escape "$action")\",\"output\":\"$(json_escape "$output")\"}"
+}
+
+cmd_tproxy() {
+    local action="$1"
+
+    case "$action" in
+        start|stop|restart) ;;
+        status)
+            emit_ok "tproxy" "{\"running\":$(tproxy_running && printf true || printf false),\"mode\":$(config_get_clean "PROXY_MODE")}"
+            return 0
+            ;;
+        *)
+            emit_error "unsupported tproxy action: $action" "tproxy"
+            ;;
+    esac
+
+    local output
+    output="$("$TPROXY_SCRIPT" "$action" 2>&1)"
+    local exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        emit_error "$output" "tproxy"
+    fi
+
+    emit_ok "tproxy" "{\"action\":\"$(json_escape "$action")\",\"running\":$(tproxy_running && printf true || printf false),\"output\":\"$(json_escape "$output")\"}"
+}
+
+cmd_manual_mode() {
+    local action="${1:-status}"
+    local manual_file
+
+    manual_file="$(manual_file_path)"
+
+    case "$action" in
+        status)
+            emit_ok "manual-mode" "{\"enabled\":$(manual_mode_enabled && printf true || printf false),\"path\":\"$(json_escape "$manual_file")\"}"
+            ;;
+        enable|on|1)
+            mkdir -p "$(dirname "$manual_file")" || emit_error "failed to prepare manual mode path" "manual-mode"
+            : > "$manual_file" || emit_error "failed to enable manual mode" "manual-mode"
+            emit_ok "manual-mode" "{\"enabled\":true,\"path\":\"$(json_escape "$manual_file")\"}"
+            ;;
+        disable|off|0)
+            rm -f "$manual_file" || emit_error "failed to disable manual mode" "manual-mode"
+            emit_ok "manual-mode" "{\"enabled\":false,\"path\":\"$(json_escape "$manual_file")\"}"
+            ;;
+        *)
+            emit_error "manual-mode action must be status, enable/on/1 or disable/off/0" "manual-mode"
+            ;;
+    esac
+}
+
+cmd_check_log() {
+    local lines="${1:-80}"
+    local check_log
+
+    case "$lines" in
+        ''|*[!0-9]*)
+            emit_error "lines must be a positive integer" "check-log"
+            ;;
+    esac
+
+    check_log="$(check_log_file_path)"
+
+    if [ ! -f "$check_log" ]; then
+        emit_ok "check-log" "{\"path\":\"$(json_escape "$check_log")\",\"exists\":false,\"lines\":$lines,\"content\":\"\"}"
+        return 0
+    fi
+
+    emit_ok "check-log" "{\"path\":\"$(json_escape "$check_log")\",\"exists\":true,\"lines\":$lines,\"content\":\"$(json_escape "$(tail -n "$lines" "$check_log" 2>/dev/null)")\"}"
+}
+
+cmd_apps() {
+    source_tproxy_config
+
+    local proxy_list bypass_list
+    proxy_list="$(json_escape "$PROXY_APPS_LIST")"
+    bypass_list="$(json_escape "$BYPASS_APPS_LIST")"
+
+    emit_ok "apps" "{\"enabled\":$(json_bool "$APP_PROXY_ENABLE"),\"mode\":\"$(json_escape "$APP_PROXY_MODE")\",\"proxy_apps\":\"$proxy_list\",\"bypass_apps\":\"$bypass_list\"}"
+}
+
+cmd_set_apps() {
+    local mode="$1"
+    shift
+    local value="$*"
+    local normalized_value
+
+    normalized_value="$(printf '%s' "$value" | tr '\r\n\t' '   ' | awk '{$1=$1;print}')"
+
+    case "$mode" in
+        whitelist)
+            config_set "APP_PROXY_MODE" "whitelist"
+            config_set_numeric "APP_PROXY_ENABLE" 1
+            config_set "PROXY_APPS_LIST" "$normalized_value"
+            ;;
+        blacklist)
+            config_set "APP_PROXY_MODE" "blacklist"
+            config_set_numeric "APP_PROXY_ENABLE" 1
+            config_set "BYPASS_APPS_LIST" "$normalized_value"
+            ;;
+        disable)
+            config_set_numeric "APP_PROXY_ENABLE" 0
+            ;;
+        *)
+            emit_error "apps mode must be whitelist, blacklist or disable" "set-apps"
+            ;;
+    esac
+
+    cmd_apps
+}
+
+cmd_mihomo_panel_url() {
+    source_box_config
+
+    local host port secret scheme external_controller panel_url
+    host="${1:-127.0.0.1}"
+    port="${2:-$clash_api_port}"
+    secret="${3:-$clash_api_secret}"
+    scheme="${4:-http}"
+    external_controller="${scheme}://${host}:${port}"
+    panel_url="https://yacd.metacubex.one/#/setup?hostname=$(json_escape "$host")&port=$(json_escape "$port")&secret=$(json_escape "$secret")&https=$( [ "$scheme" = "https" ] && printf true || printf false )"
+
+    emit_ok "mihomo-panel-url" "{\"host\":\"$(json_escape "$host")\",\"port\":\"$(json_escape "$port")\",\"secret\":\"$(json_escape "$secret")\",\"external_controller\":\"$(json_escape "$external_controller")\",\"panel_url\":\"$panel_url\"}"
+}
