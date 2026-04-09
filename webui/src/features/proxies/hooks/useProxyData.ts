@@ -1,7 +1,8 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ClashClient } from '@/lib/clash';
-import { notify } from '@/lib/bridge';
+import { boxBridge, notify, waitForJob } from '@/lib/bridge';
+import type { BoxSubscription } from '@/types/box';
 import type { ProviderMap, ProxyMap } from '../types';
 
 function useIsMounted() {
@@ -15,10 +16,15 @@ function useIsMounted() {
   return isMounted;
 }
 
-export function useProxyData(status: { running: boolean; clash_api_port: string; clash_api_secret: string }) {
+function getSubscriptionQueuedText(currentName: string | null) {
+  return currentName ? '订阅更新任务' : '订阅新增任务';
+}
+
+export function useProxyData(status: { running: boolean; bin_name?: string; clash_api_port: string; clash_api_secret: string }) {
   const isMounted = useIsMounted();
   const [proxies, setProxies] = useState<ProxyMap | null>(null);
   const [providers, setProviders] = useState<ProviderMap | null>(null);
+  const [subscriptions, setSubscriptions] = useState<BoxSubscription[]>([]);
   const [latencies, setLatencies] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
@@ -65,6 +71,20 @@ export function useProxyData(status: { running: boolean; clash_api_port: string;
     });
   }, []);
 
+  const refreshManagedSubscriptions = useCallback(async (signal?: AbortSignal) => {
+    if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
+      if (isMounted.current) setSubscriptions([]);
+      return [];
+    }
+
+    const data = await (status.bin_name === 'mihomo'
+      ? boxBridge.mihomoSubscriptions()
+      : boxBridge.singboxSubscriptionViews()) as BoxSubscription[];
+    if (signal?.aborted || !isMounted.current) return data;
+    setSubscriptions(Array.isArray(data) ? data : []);
+    return data;
+  }, [isMounted, status.bin_name]);
+
   const fetchInitialData = useCallback(async (signal?: AbortSignal) => {
     if (!status.running) return;
     setLoading(true);
@@ -75,6 +95,7 @@ export function useProxyData(status: { running: boolean; clash_api_port: string;
         client.getProviders({ signal }),
         client.getConfig({ signal }),
       ]);
+      await refreshManagedSubscriptions(signal);
 
       if (!proxyData || signal?.aborted || !isMounted.current) return;
 
@@ -99,7 +120,7 @@ export function useProxyData(status: { running: boolean; clash_api_port: string;
         setLoading(false);
       }
     }
-  }, [client, isMounted, status.running]);
+  }, [client, isMounted, refreshManagedSubscriptions, status.running]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -151,6 +172,82 @@ export function useProxyData(status: { running: boolean; clash_api_port: string;
       if (isMounted.current) setUpdatingProvider(null);
     }
   }, [client, isMounted, updatingProvider]);
+
+  const handleSaveSubscription = useCallback(async (currentName: string | null, nextName: string, url: string) => {
+    if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
+      throw new Error('当前核心不支持该操作');
+    }
+
+    const action = status.bin_name === 'mihomo'
+      ? (currentName ? boxBridge.updateMihomoSubscription(currentName, nextName, url) : boxBridge.addMihomoSubscription(nextName, url))
+      : (currentName ? boxBridge.updateSingboxSubscription(currentName, nextName, url) : boxBridge.addSingboxSubscription(nextName, url));
+    const job = await action;
+    const providerName = currentName || nextName;
+    setUpdatingProvider(providerName);
+    notify(`${getSubscriptionQueuedText(currentName)}已转入后台`);
+    void waitForJob(job.job_id)
+      .then(async () => {
+        await refreshManagedSubscriptions();
+        try {
+          await fetchInitialData();
+        } catch {
+          // Runtime provider refresh is best-effort; config state is the source of truth.
+        }
+        if (isMounted.current) {
+          notify(currentName ? '订阅已更新' : '订阅已新增');
+        }
+      })
+      .catch((error: unknown) => {
+        if (isMounted.current) notify(`订阅保存失败: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        if (isMounted.current) setUpdatingProvider(prev => (prev === providerName ? null : prev));
+      });
+    return job;
+  }, [fetchInitialData, isMounted, refreshManagedSubscriptions, status.bin_name]);
+
+  const handleRemoveSubscription = useCallback(async (name: string) => {
+    if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
+      throw new Error('当前核心不支持该操作');
+    }
+
+    await (status.bin_name === 'mihomo'
+      ? boxBridge.removeMihomoSubscription(name)
+      : boxBridge.removeSingboxSubscription(name));
+    await refreshManagedSubscriptions();
+    try {
+      await fetchInitialData();
+    } catch {
+      // Runtime provider refresh is best-effort; config state is the source of truth.
+    }
+  }, [fetchInitialData, isMounted, refreshManagedSubscriptions, status.bin_name]);
+
+  const handleRefreshSubscription = useCallback(async (name: string, url: string) => {
+    if (status.bin_name !== 'sing-box') {
+      throw new Error('当前核心不支持刷新订阅缓存');
+    }
+
+    setUpdatingProvider(name);
+    const job = await boxBridge.updateSingboxSubscription(name, name, url);
+    notify('订阅刷新已转入后台');
+    void waitForJob(job.job_id)
+      .then(async () => {
+        await refreshManagedSubscriptions();
+        try {
+          await fetchInitialData();
+        } catch {
+          // Runtime refresh is best-effort.
+        }
+        if (isMounted.current) notify('订阅缓存已刷新');
+      })
+      .catch((error: unknown) => {
+        if (isMounted.current) notify(`刷新失败: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => {
+        if (isMounted.current) setUpdatingProvider(prev => (prev === name ? null : prev));
+      });
+    return job;
+  }, [fetchInitialData, refreshManagedSubscriptions, status.bin_name]);
 
   const handleTestProvider = useCallback(async (e: React.MouseEvent, name: string) => {
     e.stopPropagation();
@@ -208,6 +305,7 @@ export function useProxyData(status: { running: boolean; clash_api_port: string;
   return {
     proxies,
     providers,
+    subscriptions,
     latencies,
     loading,
     apiError,
@@ -221,5 +319,8 @@ export function useProxyData(status: { running: boolean; clash_api_port: string;
     handleUpdateProvider,
     handleTestProvider,
     handleTestGroup,
+    handleSaveSubscription,
+    handleRemoveSubscription,
+    handleRefreshSubscription,
   };
 }

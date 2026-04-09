@@ -1,8 +1,10 @@
 import type { Proxy, ProxyProvider } from '@/lib/clash';
+import type { BoxSubscription } from '@/types/box';
 
 export interface TabProxiesProps {
   status: {
     running: boolean;
+    bin_name?: string;
     clash_api_port: string;
     clash_api_secret: string;
   };
@@ -20,6 +22,13 @@ export type ProxyPrefs = {
 
 export type ProxyMap = Record<string, Proxy>;
 export type ProviderMap = Record<string, ProxyProvider>;
+
+export interface ProviderCardModel {
+  name: string;
+  provider: ProxyProvider;
+  subscription?: BoxSubscription;
+  hasRuntimeProvider: boolean;
+}
 
 export const MODE_OPTIONS = [
   { id: 'direct', label: '直连' },

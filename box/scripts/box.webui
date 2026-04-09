@@ -10,6 +10,14 @@ TPROXY_CONFIG_FILE="${scripts_dir}/tproxy.conf"
 SERVICE_SCRIPT="${scripts_dir}/box.service"
 TPROXY_SCRIPT="${scripts_dir}/box.tproxy"
 MODULE_ROOT="/data/adb/modules/box4"
+MIHOMO_CONFIG_FILE="/data/adb/box/mihomo/config.yaml"
+SINGBOX_CONFIG_DIR="/data/adb/box/sing-box"
+SINGBOX_TEMPLATE_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.template.json"
+SINGBOX_ACTIVE_CONFIG_FILE="${SINGBOX_CONFIG_DIR}/config.json"
+SINGBOX_SUBSCRIPTIONS_DIR="${SINGBOX_CONFIG_DIR}/subscriptions"
+LEGACY_SUBSCRIPTIONS_DIR="/data/adb/box/run/webui_subscriptions"
+ASYNC_JOBS_DIR="/data/adb/box/run/webui_jobs"
+CLASH_UA="FlClash/v0.8.92 clash-verge Platform/android"
 
 [ -n "$(magisk -v 2>/dev/null | grep lite)" ] && MODULE_ROOT="/data/adb/lite_modules/box4"
 
@@ -66,6 +74,28 @@ fetch_url() {
     return 127
 }
 
+fetch_url_with_ua() {
+    local url="$1"
+    local user_agent="$2"
+
+    if command_exists curl; then
+        curl -fsSL --connect-timeout 20 --retry 2 -A "$user_agent" "$url"
+        return $?
+    fi
+
+    if command_exists wget; then
+        wget --user-agent="$user_agent" -qO- "$url"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox wget -U "$user_agent" -qO- "$url"
+        return $?
+    fi
+
+    return 127
+}
+
 download_to_file() {
     local url="$1"
     local output="$2"
@@ -82,6 +112,29 @@ download_to_file() {
 
     if command_exists busybox; then
         busybox wget -O "$output" "$url"
+        return $?
+    fi
+
+    return 127
+}
+
+download_to_file_with_ua() {
+    local url="$1"
+    local output="$2"
+    local user_agent="$3"
+
+    if command_exists curl; then
+        curl -fL --connect-timeout 20 --retry 2 -A "$user_agent" -o "$output" "$url"
+        return $?
+    fi
+
+    if command_exists wget; then
+        wget --user-agent="$user_agent" -O "$output" "$url"
+        return $?
+    fi
+
+    if command_exists busybox; then
+        busybox wget -U "$user_agent" -O "$output" "$url"
         return $?
     fi
 
@@ -285,6 +338,85 @@ emit_ok() {
         "${data:-null}"
 }
 
+async_job_file() {
+    printf '%s/%s.json' "$ASYNC_JOBS_DIR" "$1"
+}
+
+async_job_write_state() {
+    local job_id="$1"
+    local kind="$2"
+    local status="$3"
+    local message="$4"
+    local error="$5"
+    local updated_at output_file
+
+    updated_at="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    output_file="$(async_job_file "$job_id")"
+    mkdir -p "$ASYNC_JOBS_DIR" || return 1
+
+    printf '{"id":"%s","kind":"%s","status":"%s","message":"%s","error":"%s","updated_at":"%s"}\n' \
+        "$(json_escape "$job_id")" \
+        "$(json_escape "$kind")" \
+        "$(json_escape "$status")" \
+        "$(json_escape "$message")" \
+        "$(json_escape "$error")" \
+        "$(json_escape "$updated_at")" > "$output_file"
+}
+
+start_async_job() {
+    local command_name="$1"
+    local kind="$2"
+    shift 2
+    local job_id
+
+    mkdir -p "$ASYNC_JOBS_DIR" || emit_error "failed to prepare async jobs directory" "$command_name"
+    job_id="$(date +%s).$$.$(printf '%s' "$kind" | tr -cs 'A-Za-z0-9._-' '_')"
+    async_job_write_state "$job_id" "$kind" "queued" "scheduled" "" \
+        || emit_error "failed to create async job" "$command_name"
+
+    nohup "$scripts" "__run-job" "$job_id" "$kind" "$@" >/dev/null 2>&1 &
+
+    emit_ok "$command_name" "{\"job_id\":\"$(json_escape "$job_id")\",\"kind\":\"$(json_escape "$kind")\",\"status\":\"queued\"}"
+}
+
+normalize_job_error() {
+    local output="$1"
+
+    printf '%s' "$output" | sed -n 's/.*"error":"\([^"]*\)".*/\1/p' | tail -n 1
+}
+
+run_async_job_target() {
+    local job_id="$1"
+    local kind="$2"
+    shift 2
+    local output="" error_message="" worker_command=""
+
+    async_job_write_state "$job_id" "$kind" "running" "running" ""
+
+    case "$kind" in
+        mihomo-subscription-add) worker_command="__sync-mihomo-subscription-add" ;;
+        mihomo-subscription-update) worker_command="__sync-mihomo-subscription-update" ;;
+        singbox-subscription-add) worker_command="__sync-singbox-subscription-add" ;;
+        singbox-subscription-update) worker_command="__sync-singbox-subscription-update" ;;
+        download-cores) worker_command="__sync-download-cores" ;;
+        *)
+            async_job_write_state "$job_id" "$kind" "error" "" "unsupported async job kind: $kind"
+            return 1
+            ;;
+    esac
+
+    output="$("$scripts" "$worker_command" "$@" 2>&1)"
+    if [ $? -eq 0 ]; then
+        async_job_write_state "$job_id" "$kind" "success" "completed" ""
+        return 0
+    fi
+
+    error_message="$(normalize_job_error "$output")"
+    [ -n "$error_message" ] || error_message="$output"
+    async_job_write_state "$job_id" "$kind" "error" "" "$error_message"
+    return 1
+}
+
 queue_service_action() {
     local action="$1"
     local request_dir="/data/adb/box/run/webui_service_queue"
@@ -334,6 +466,161 @@ source_tproxy_config() {
 source_all_configs() {
     source_box_config
     source_tproxy_config
+}
+
+# 可以省略
+resolve_mihomo2singbox_bin() {
+    local candidate
+
+    for candidate in \
+        "/data/adb/box/bin/mihomo2singbox" \
+        "${scripts_dir}/../bin/mihomo2singbox" \
+        "${scripts_dir}/../../src/mihomo2singbox/target/debug/mihomo2singbox"
+    do
+        [ -x "$candidate" ] && printf '%s' "$candidate" && return 0
+    done
+
+    return 1
+}
+
+run_mihomo_provider_tool() {
+    local subcommand="$1"
+    shift
+    local sync_bin output
+
+    sync_bin="$(resolve_mihomo2singbox_bin)" || emit_error "mihomo2singbox binary not found" "mihomo-subscriptions"
+    output="$("$sync_bin" "$subcommand" --config "$MIHOMO_CONFIG_FILE" "$@" 2>/dev/null)" \
+        || emit_error "failed to ${subcommand}" "mihomo-subscriptions"
+    printf '%s' "$output"
+}
+
+ensure_singbox_subscription_store() {
+    mkdir -p "$SINGBOX_SUBSCRIPTIONS_DIR" || return 1
+}
+
+singbox_subscription_cache_file() {
+    local name="$1"
+    local encoded
+    encoded="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '_')"
+    printf '%s/%s.txt' "$SINGBOX_SUBSCRIPTIONS_DIR" "$encoded"
+}
+
+validate_subscription_name() {
+    case "$1" in
+        ''|*$'\n'*|*$'\r'*|*$'\t'*)
+            emit_error "invalid subscription name" "${2:-subscriptions}"
+            ;;
+    esac
+}
+
+migrate_legacy_mihomo_subscriptions() {
+    local legacy_file="${LEGACY_SUBSCRIPTIONS_DIR}/mihomo.tsv"
+    local sync_bin
+
+    [ -f "$legacy_file" ] || return 0
+    if [ -f "$MIHOMO_CONFIG_FILE" ] && run_mihomo_provider_tool list-mihomo-providers >/dev/null 2>&1; then
+        return 0
+    fi
+
+    sync_bin="$(resolve_mihomo2singbox_bin)" || return 1
+    "$sync_bin" sync-mihomo-providers \
+        --config "$MIHOMO_CONFIG_FILE" \
+        --state "$legacy_file" \
+        || return 1
+
+    rm -f "$legacy_file"
+}
+
+list_mihomo_subscriptions_json() {
+    migrate_legacy_mihomo_subscriptions || return 1
+    run_mihomo_provider_tool list-mihomo-providers
+}
+
+run_singbox_subscription_tool() {
+    local subcommand="$1"
+    shift
+    local sync_bin output
+
+    sync_bin="$(resolve_mihomo2singbox_bin)" || emit_error "mihomo2singbox binary not found" "singbox-subscriptions"
+    output="$("$sync_bin" "$subcommand" --config "$SINGBOX_TEMPLATE_CONFIG_FILE" "$@" 2>/dev/null)" \
+        || emit_error "failed to ${subcommand}" "singbox-subscriptions"
+    printf '%s' "$output"
+}
+
+build_singbox_runtime_config() {
+    local sync_bin output
+
+    sync_bin="$(resolve_mihomo2singbox_bin)" || emit_error "mihomo2singbox binary not found" "singbox-build"
+    output="$("$sync_bin" build-singbox-config \
+        --config "$SINGBOX_TEMPLATE_CONFIG_FILE" \
+        --subscriptions-dir "$SINGBOX_SUBSCRIPTIONS_DIR" \
+        --output "$SINGBOX_ACTIVE_CONFIG_FILE" 2>/dev/null)" \
+        || emit_error "failed to build sing-box config" "singbox-build"
+    printf '%s' "$output"
+}
+
+inspect_singbox_subscription_views() {
+    local sync_bin output
+
+    sync_bin="$(resolve_mihomo2singbox_bin)" || emit_error "mihomo2singbox binary not found" "singbox-subscriptions"
+    output="$("$sync_bin" inspect-singbox-subscriptions \
+        --config "$SINGBOX_TEMPLATE_CONFIG_FILE" \
+        --subscriptions-dir "$SINGBOX_SUBSCRIPTIONS_DIR" 2>/dev/null)" \
+        || emit_error "failed to inspect sing-box subscriptions" "singbox-subscriptions"
+    printf '%s' "$output"
+}
+
+migrate_legacy_singbox_subscriptions() {
+    local legacy_file="${LEGACY_SUBSCRIPTIONS_DIR}/sing-box.tsv"
+    [ -f "$legacy_file" ] || return 0
+
+    run_singbox_subscription_tool sync-singbox-subscriptions --state "$legacy_file" >/dev/null || return 1
+    rm -f "$legacy_file"
+}
+
+list_singbox_subscriptions_json() {
+    local entries
+    migrate_legacy_singbox_subscriptions || return 1
+    ensure_singbox_subscription_store || return 1
+    entries="$(run_singbox_subscription_tool list-singbox-subscriptions)" || return 1
+    printf '%s' "$entries"
+}
+
+save_mihomo_subscription_entry() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+
+    migrate_legacy_mihomo_subscriptions || emit_error "failed to migrate mihomo subscriptions" "mihomo-subscriptions"
+    run_mihomo_provider_tool set-mihomo-provider \
+        --current-name "$current_name" \
+        --name "$next_name" \
+        --url "$url" >/dev/null
+}
+
+remove_mihomo_subscription_entry() {
+    local name="$1"
+
+    migrate_legacy_mihomo_subscriptions || emit_error "failed to migrate mihomo subscriptions" "mihomo-subscriptions"
+    run_mihomo_provider_tool remove-mihomo-provider --name "$name" >/dev/null
+}
+
+download_singbox_subscription_cache() {
+    local name="$1"
+    local url="$2"
+    local output_file tmp_file user_agent
+
+    output_file="$(singbox_subscription_cache_file "$name")" || emit_error "failed to resolve cache path" "subscriptions"
+    tmp_file="${output_file}.tmp.$$"
+    user_agent="$CLASH_UA"
+
+    mkdir -p "$(dirname "$output_file")" || emit_error "failed to prepare cache directory" "subscriptions"
+    download_to_file_with_ua "$url" "$tmp_file" "$user_agent" || {
+        rm -f "$tmp_file"
+        emit_error "failed to download subscription: $url" "subscriptions"
+    }
+    mv "$tmp_file" "$output_file" || emit_error "failed to move cached subscription" "subscriptions"
+    printf '%s' "$output_file"
 }
 
 config_file_for_key() {
@@ -748,17 +1035,20 @@ cmd_set_apps() {
     local mode="$1"
     shift
     local value="$*"
+    local normalized_value
+
+    normalized_value="$(printf '%s' "$value" | tr '\r\n\t' '   ' | awk '{$1=$1;print}')"
 
     case "$mode" in
         whitelist)
             config_set "APP_PROXY_MODE" "whitelist"
             config_set_numeric "APP_PROXY_ENABLE" 1
-            config_set "PROXY_APPS_LIST" "$value"
+            config_set "PROXY_APPS_LIST" "$normalized_value"
             ;;
         blacklist)
             config_set "APP_PROXY_MODE" "blacklist"
             config_set_numeric "APP_PROXY_ENABLE" 1
-            config_set "BYPASS_APPS_LIST" "$value"
+            config_set "BYPASS_APPS_LIST" "$normalized_value"
             ;;
         disable)
             config_set_numeric "APP_PROXY_ENABLE" 0
@@ -785,7 +1075,125 @@ cmd_mihomo_panel_url() {
     emit_ok "mihomo-panel-url" "{\"host\":\"$(json_escape "$host")\",\"port\":\"$(json_escape "$port")\",\"secret\":\"$(json_escape "$secret")\",\"external_controller\":\"$(json_escape "$external_controller")\",\"panel_url\":\"$panel_url\"}"
 }
 
+cmd_mihomo_subscriptions() {
+    local data
+    data="$(list_mihomo_subscriptions_json)" || emit_error "failed to read mihomo subscriptions" "mihomo-subscriptions"
+    emit_ok "mihomo-subscriptions" "$data"
+}
+
+cmd_mihomo_subscription_add() {
+    start_async_job "mihomo-subscription-add" "mihomo-subscription-add" "$@"
+}
+
+cmd_sync_mihomo_subscription_add() {
+    local name="$1"
+    local url="$2"
+    validate_subscription_name "$name" "mihomo-subscription-add"
+    [ -n "$url" ] || emit_error "missing subscription url" "mihomo-subscription-add"
+
+    save_mihomo_subscription_entry "$name" "$name" "$url"
+    emit_ok "mihomo-subscription-add" "{\"name\":\"$(json_escape "$name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"\"}"
+}
+
+cmd_mihomo_subscription_update() {
+    start_async_job "mihomo-subscription-update" "mihomo-subscription-update" "$@"
+}
+
+cmd_sync_mihomo_subscription_update() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+
+    validate_subscription_name "$current_name" "mihomo-subscription-update"
+    validate_subscription_name "$next_name" "mihomo-subscription-update"
+    [ -n "$url" ] || emit_error "missing subscription url" "mihomo-subscription-update"
+
+    save_mihomo_subscription_entry "$current_name" "$next_name" "$url"
+    emit_ok "mihomo-subscription-update" "{\"name\":\"$(json_escape "$next_name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"\"}"
+}
+
+cmd_mihomo_subscription_remove() {
+    local name="$1"
+
+    validate_subscription_name "$name" "mihomo-subscription-remove"
+    remove_mihomo_subscription_entry "$name"
+    emit_ok "mihomo-subscription-remove" "{\"name\":\"$(json_escape "$name")\"}"
+}
+
+cmd_singbox_subscriptions() {
+    local data
+    data="$(list_singbox_subscriptions_json)" || emit_error "failed to prepare subscription store" "singbox-subscriptions"
+    emit_ok "singbox-subscriptions" "$data"
+}
+
+cmd_singbox_subscription_views() {
+    local data
+    migrate_legacy_singbox_subscriptions || emit_error "failed to migrate sing-box subscriptions" "singbox-subscription-views"
+    ensure_singbox_subscription_store || emit_error "failed to prepare subscription cache" "singbox-subscription-views"
+    data="$(inspect_singbox_subscription_views)" || emit_error "failed to inspect sing-box subscriptions" "singbox-subscription-views"
+    emit_ok "singbox-subscription-views" "$data"
+}
+
+cmd_singbox_subscription_add() {
+    start_async_job "singbox-subscription-add" "singbox-subscription-add" "$@"
+}
+
+cmd_sync_singbox_subscription_add() {
+    local name="$1"
+    local url="$2"
+    local cache_file
+
+    validate_subscription_name "$name" "singbox-subscription-add"
+    [ -n "$url" ] || emit_error "missing subscription url" "singbox-subscription-add"
+
+    cache_file="$(download_singbox_subscription_cache "$name" "$url")" \
+        || emit_error "failed to download subscription: $url" "singbox-subscription-add"
+    run_singbox_subscription_tool set-singbox-subscription --name "$name" --url "$url" >/dev/null
+    build_singbox_runtime_config >/dev/null
+    emit_ok "singbox-subscription-add" "{\"name\":\"$(json_escape "$name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"$(json_escape "$cache_file")\"}"
+}
+
+cmd_singbox_subscription_update() {
+    start_async_job "singbox-subscription-update" "singbox-subscription-update" "$@"
+}
+
+cmd_sync_singbox_subscription_update() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+    local old_cache_file new_cache_file
+
+    validate_subscription_name "$current_name" "singbox-subscription-update"
+    validate_subscription_name "$next_name" "singbox-subscription-update"
+    [ -n "$url" ] || emit_error "missing subscription url" "singbox-subscription-update"
+
+    new_cache_file="$(download_singbox_subscription_cache "$next_name" "$url")" \
+        || emit_error "failed to download subscription: $url" "singbox-subscription-update"
+    run_singbox_subscription_tool set-singbox-subscription --current-name "$current_name" --name "$next_name" --url "$url" >/dev/null
+    if [ "$current_name" != "$next_name" ]; then
+        old_cache_file="$(singbox_subscription_cache_file "$current_name")"
+        rm -f "$old_cache_file"
+    fi
+    build_singbox_runtime_config >/dev/null
+
+    emit_ok "singbox-subscription-update" "{\"name\":\"$(json_escape "$next_name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"$(json_escape "$new_cache_file")\"}"
+}
+
+cmd_singbox_subscription_remove() {
+    local name="$1"
+
+    validate_subscription_name "$name" "singbox-subscription-remove"
+    run_singbox_subscription_tool remove-singbox-subscription --name "$name" >/dev/null
+    rm -f "$(singbox_subscription_cache_file "$name")"
+    build_singbox_runtime_config >/dev/null
+    emit_ok "singbox-subscription-remove" "{\"name\":\"$(json_escape "$name")\"}"
+}
+
 cmd_download_cores() {
+    start_async_job "download-cores" "download-cores" "$@"
+}
+
+cmd_sync_download_cores() {
     source_box_config
 
     local arch_map sing_box_arch mihomo_arch xray_arch tmp_dir result_file
@@ -839,8 +1247,31 @@ cmd_download_cores() {
     emit_ok "download-cores" "{\"arch\":{\"sing-box\":\"$(json_escape "$sing_box_arch")\",\"mihomo\":\"$(json_escape "$mihomo_arch")\",\"xray\":\"$(json_escape "$xray_arch")\"},\"installed\":$ok_count,\"failed\":$fail_count,\"results\":{${json_results}}}"
 }
 
+cmd_job_status() {
+    local job_id="$1"
+    local job_file payload
+
+    [ -n "$job_id" ] || emit_error "missing job id" "job-status"
+    job_file="$(async_job_file "$job_id")"
+    [ -f "$job_file" ] || emit_error "job not found: $job_id" "job-status"
+
+    payload="$(cat "$job_file" 2>/dev/null)"
+    [ -n "$payload" ] || emit_error "failed to read job status" "job-status"
+    emit_ok "job-status" "$payload"
+}
+
+cmd_run_job() {
+    local job_id="$1"
+    local kind="$2"
+    shift 2
+
+    [ -n "$job_id" ] || exit 1
+    [ -n "$kind" ] || exit 1
+    run_async_job_target "$job_id" "$kind" "$@"
+}
+
 cmd_help() {
-    emit_ok "help" '["status","get-config","set-config KEY [VALUE]","set-number KEY VALUE","toggle KEY 0|1","service start|stop|restart|status","tproxy start|stop|restart|status","manual-mode [status|enable|disable]","check-log [LINES]","apps","set-apps whitelist|blacklist|disable [LIST]","mihomo-panel-url [HOST] [PORT] [SECRET] [http|https]","download-cores","capabilities"]'
+    emit_ok "help" '["status","get-config","set-config KEY [VALUE]","set-number KEY VALUE","toggle KEY 0|1","service start|stop|restart|status","tproxy start|stop|restart|status","manual-mode [status|enable|disable]","check-log [LINES]","apps","set-apps whitelist|blacklist|disable [LIST]","mihomo-panel-url [HOST] [PORT] [SECRET] [http|https]","mihomo-subscriptions","mihomo-subscription-add NAME URL","mihomo-subscription-update CURRENT_NAME NEXT_NAME URL","mihomo-subscription-remove NAME","singbox-subscriptions","singbox-subscription-views","singbox-subscription-add NAME URL","singbox-subscription-update CURRENT_NAME NEXT_NAME URL","singbox-subscription-remove NAME","download-cores","job-status JOB_ID","capabilities"]'
 }
 
 command="$1"
@@ -859,7 +1290,23 @@ case "$command" in
     apps) cmd_apps ;;
     set-apps) cmd_set_apps "$@" ;;
     mihomo-panel-url) cmd_mihomo_panel_url "$@" ;;
+    mihomo-subscriptions) cmd_mihomo_subscriptions ;;
+    mihomo-subscription-add) cmd_mihomo_subscription_add "$@" ;;
+    mihomo-subscription-update) cmd_mihomo_subscription_update "$@" ;;
+    __sync-mihomo-subscription-add) cmd_sync_mihomo_subscription_add "$@" ;;
+    __sync-mihomo-subscription-update) cmd_sync_mihomo_subscription_update "$@" ;;
+    mihomo-subscription-remove) cmd_mihomo_subscription_remove "$@" ;;
+    singbox-subscriptions) cmd_singbox_subscriptions ;;
+    singbox-subscription-views) cmd_singbox_subscription_views ;;
+    singbox-subscription-add) cmd_singbox_subscription_add "$@" ;;
+    singbox-subscription-update) cmd_singbox_subscription_update "$@" ;;
+    __sync-singbox-subscription-add) cmd_sync_singbox_subscription_add "$@" ;;
+    __sync-singbox-subscription-update) cmd_sync_singbox_subscription_update "$@" ;;
+    singbox-subscription-remove) cmd_singbox_subscription_remove "$@" ;;
     download-cores) cmd_download_cores "$@" ;;
+    __sync-download-cores) cmd_sync_download_cores "$@" ;;
+    job-status) cmd_job_status "$@" ;;
+    __run-job) cmd_run_job "$@" ;;
     capabilities) cmd_capabilities ;;
     help|"") cmd_help ;;
     *) emit_error "unsupported command: $command" "$command" ;;

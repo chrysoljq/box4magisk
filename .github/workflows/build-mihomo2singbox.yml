@@ -1,0 +1,50 @@
+name: build-mihomo2singbox
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-mihomo2singbox.yml"
+      - "src/mihomo2singbox/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/mihomo2singbox
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/mihomo2singbox
+
+      - name: Build Android arm64 binary
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+        run: cargo build --release --target aarch64-linux-android
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo2singbox-android-arm64
+          path: src/mihomo2singbox/target/aarch64-linux-android/release/mihomo2singbox

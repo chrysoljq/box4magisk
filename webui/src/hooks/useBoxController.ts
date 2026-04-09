@@ -43,6 +43,41 @@ const NUMERIC_KEYS = new Set([
   'TABLE_ID',
 ]);
 
+const APP_CONFIG_KEYS = new Set([
+  'APP_PROXY_ENABLE',
+  'APP_PROXY_MODE',
+  'PROXY_APPS_LIST',
+  'BYPASS_APPS_LIST',
+]);
+
+const CORE_RESTART_KEYS = new Set([
+  'bin_name',
+  'CORE_USER_GROUP',
+  'ROUTING_MARK',
+  'box_user_group',
+  'clash_api_port',
+  'clash_api_secret',
+  'use_custom_direct',
+  'ctr_mode',
+  'select_outbound',
+  'default_outbound',
+  'direct_outbound',
+  'proxy_outbound',
+  'direct_outbound_list',
+  'default_clash_mode',
+  'direct_clash_mode',
+  'proxy_clash_mode',
+  'direct_clash_mode_list',
+]);
+
+function normalizeAppListValue(value: string | number | boolean | undefined) {
+  return String(value ?? '')
+    .split(/\s+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 export function useBoxController(): BoxControllerState {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<BoxStatus>({ running: false, pid: '', bin_name: 'sing-box', clash_api_port: '9090', clash_api_secret: '' });
@@ -114,7 +149,21 @@ export function useBoxController(): BoxControllerState {
             ? await waitForStatus(false)
             : await boxBridge.status();
       setStatus(nextStatus);
-      notify(action === 'stop' ? '服务已停止' : '服务已启动');
+      notify(action === 'stop' ? '服务已停止' : action === 'restart' ? '内核已重启' : '服务已启动');
+    } catch (e: unknown) {
+      notify(`操作失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    setActionLoading(null);
+  };
+
+  const handleTproxyAction = async (action: 'restart') => {
+    setActionLoading(`tproxy-${action}`);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    try {
+      await boxBridge.tproxy(action);
+      const nextStatus = normalizeStatus(await boxBridge.status());
+      setStatus(nextStatus);
+      notify(action === 'restart' ? 'TProxy 已重启' : 'TProxy 操作完成');
     } catch (e: unknown) {
       notify(`操作失败: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -133,15 +182,23 @@ export function useBoxController(): BoxControllerState {
     setActionLoading('save');
     try {
       let isAppsChanged = false;
+      let needsCoreRestart = false;
+      let needsTproxyRestart = false;
       const keysChanged: string[] = [];
       const newConfig = { ...config };
 
       for (const key of Object.keys(newConfig)) {
         if (newConfig[key] !== originalConfig[key]) {
-          if (['APP_PROXY_ENABLE', 'APP_PROXY_MODE', 'PROXY_APPS_LIST', 'BYPASS_APPS_LIST'].includes(key)) {
+          if (APP_CONFIG_KEYS.has(key)) {
             isAppsChanged = true;
+            needsTproxyRestart = true;
           } else {
             keysChanged.push(key);
+            if (CORE_RESTART_KEYS.has(key)) {
+              needsCoreRestart = true;
+            } else {
+              needsTproxyRestart = true;
+            }
           }
         }
       }
@@ -161,16 +218,21 @@ export function useBoxController(): BoxControllerState {
 
       if (isAppsChanged) {
         const modeStr = newConfig.APP_PROXY_ENABLE === 1 ? (newConfig.APP_PROXY_MODE || 'blacklist') : 'disable';
-        const listValue = newConfig.APP_PROXY_MODE === 'whitelist' ? (newConfig.PROXY_APPS_LIST || '') : (newConfig.BYPASS_APPS_LIST || '');
+        const listValue = newConfig.APP_PROXY_MODE === 'whitelist'
+          ? normalizeAppListValue(newConfig.PROXY_APPS_LIST)
+          : normalizeAppListValue(newConfig.BYPASS_APPS_LIST);
         await boxBridge.setApps(modeStr, listValue);
       }
 
-      await boxBridge.service('restart');
-
-      const nextStatus = await waitForStatus(true);
-      setStatus(nextStatus);
       setOriginalConfig(newConfig);
-      notify('已保存并生效');
+
+      if (needsCoreRestart) {
+        notify('配置已保存，需手动重启内核生效');
+      } else if (needsTproxyRestart) {
+        notify('配置已保存，需手动重启 TProxy 生效');
+      } else {
+        notify('配置已保存');
+      }
     } catch (e: unknown) {
       notify(`保存失败: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -194,6 +256,7 @@ export function useBoxController(): BoxControllerState {
     actionLoading,
     hasChanges,
     handleServiceAction,
+    handleTproxyAction,
     handleToggle,
     handleChange,
     handleSaveAndApply,

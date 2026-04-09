@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useEffectEvent, useMemo, useState } from 'react';
 import { RefreshCw, Square, Play, Smartphone, Wifi, Radio, Usb, MemoryStick } from 'lucide-react';
 import { SectionTitle, SwitchRow, SelectRow } from '@/components/ui';
 import { ClashClient, type ClashMemory } from '@/lib/clash';
@@ -59,35 +59,53 @@ export function DashboardPage({ status, config, handleServiceAction, actionLoadi
     return new ClashClient(String(status?.clash_api_port || config?.clash_api_port || 9090), String(status?.clash_api_secret || config?.clash_api_secret || ''));
   }, [status?.clash_api_port, status?.clash_api_secret, config?.clash_api_port, config?.clash_api_secret]);
 
+  const pollMemoryOnce = useEffectEvent(async (signal?: AbortSignal) => {
+    try {
+      const data = await client.getMemory({ signal, timeoutMs: 4000 });
+      if (!signal?.aborted) {
+        setMemory(data);
+      }
+    } catch {
+      if (!signal?.aborted) {
+        setMemory(null);
+      }
+    }
+  });
+
   useEffect(() => {
     if (!status?.running) {
       setMemory(null);
       return;
     }
 
-    let cancelled = false;
+    let disposed = false;
+    let timer: number | undefined;
+    let currentController: AbortController | null = null;
 
-    const loadMemory = async () => {
-      try {
-        const data = await client.getMemory();
-        if (!cancelled) {
-          setMemory(data);
-        }
-      } catch {
-        if (!cancelled) {
-          setMemory(null);
-        }
+    const scheduleNext = (delayMs: number) => {
+      timer = window.setTimeout(() => {
+        void loop();
+      }, delayMs);
+    };
+
+    const loop = async () => {
+      if (disposed) return;
+      currentController?.abort();
+      currentController = new AbortController();
+      await pollMemoryOnce(currentController.signal);
+      if (!disposed) {
+        scheduleNext(2000);
       }
     };
 
-    void loadMemory();
-    const timer = window.setInterval(loadMemory, 5000);
+    void loop();
 
     return () => {
-      cancelled = true;
-      window.clearInterval(timer);
+      disposed = true;
+      if (timer) window.clearTimeout(timer);
+      currentController?.abort();
     };
-  }, [status?.running, client]);
+  }, [status?.running, pollMemoryOnce]);
 
   return (
     <div className="px-4 space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-200">

@@ -59,7 +59,7 @@ export const ProxyGroupCard = React.memo((props: ProxyGroupCardProps) => {
   }, [group.all, groupName, proxies, latencies, sortType]);
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-sm border border-slate-100 dark:border-slate-800 transition-colors overflow-hidden">
+    <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 shadow-sm border border-slate-100 dark:border-slate-800 transition-colors">
       <div className="flex items-center justify-between cursor-pointer group-card" onClick={() => onToggleExpand(groupName)}>
         <div className="flex items-center space-x-2">
           <h3 className="font-bold text-[17px] text-slate-900 dark:text-slate-100">{groupName}</h3>

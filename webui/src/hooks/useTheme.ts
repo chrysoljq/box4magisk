@@ -46,5 +46,6 @@ export function useTheme() {
     theme,
     isDark,
     cycleTheme,
+    setTheme,
   };
 }

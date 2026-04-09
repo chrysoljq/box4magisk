@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { BookOpen, ChevronRight, ExternalLink, FolderCog, FolderGit, Info, ListFilter, Mail, Network, Route, TriangleAlert, X } from 'lucide-react';
 import { InputRow, SectionTitle, SelectRow, SwitchRow } from '@/components/ui';
 import { notify, openExternalUrl } from '@/lib/bridge';
+import { useTheme } from '@/hooks/useTheme';
 import { ensureFieldVisible } from '@/lib/focus';
 import type { BoxConfig, BoxStatus } from '@/types/box';
 
@@ -242,6 +243,7 @@ function MaintainerButton({ label, value, href }: MaintainerButtonProps) {
 
 export function SettingsPage({ status, config, handleToggle, handleChange }: SettingsPageProps) {
   const [activePanel, setActivePanel] = useState<AdvancedPanelKey>(null);
+  const { theme, setTheme } = useTheme();
 
   const handleNumberInput = <K extends keyof BoxConfig>(key: K, value: string) => {
     handleChange(key, (value === '' ? '' : Number(value)) as BoxConfig[K]);
@@ -249,6 +251,13 @@ export function SettingsPage({ status, config, handleToggle, handleChange }: Set
 
   return (
     <div className="px-4 space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+      <div>
+        <SectionTitle title="界面外观" />
+        <div className="rounded-2xl border border-slate-100 bg-white p-2 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900">
+          <SelectRow label="颜色主题" value={theme} options={[{l:'跟随系统',v:'system'},{l:'浅色模式',v:'light'},{l:'深色模式',v:'dark'}]} onChange={(value: string) => setTheme(value as 'system'|'light'|'dark')} border={false} />
+        </div>
+      </div>
+
       <div>
         <SectionTitle title="Mihomo 面板入口" />
         <div className="space-y-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm transition-colors dark:border-slate-800 dark:bg-slate-900">

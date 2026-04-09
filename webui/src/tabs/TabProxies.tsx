@@ -1,11 +1,12 @@
-import { useCallback, useMemo } from 'react';
-import { Activity, RefreshCw, Server, ServerOff, ZapOff } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { Activity, Plus, RefreshCw, Server, ServerOff, ZapOff } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { ProxyGroupCard } from '@/features/proxies/components/ProxyGroupCard';
 import { ProxyProviderCard } from '@/features/proxies/components/ProxyProviderCard';
 import { useProxyData } from '@/features/proxies/hooks/useProxyData';
 import { useProxyPrefs } from '@/features/proxies/hooks/useProxyPrefs';
-import { type NodeSortType, type TabProxiesProps } from '@/features/proxies/types';
+import { notify } from '@/lib/bridge';
+import { type NodeSortType, type ProviderCardModel, type TabProxiesProps } from '@/features/proxies/types';
 
 const GROUP_TYPES = ['Selector', 'URLTest', 'Fallback', 'LoadBalance'];
 
@@ -24,6 +25,7 @@ export function TabProxies({ status }: TabProxiesProps) {
   const {
     proxies,
     providers,
+    subscriptions,
     latencies,
     loading,
     apiError,
@@ -35,7 +37,14 @@ export function TabProxies({ status }: TabProxiesProps) {
     handleUpdateProvider,
     handleTestProvider,
     handleTestGroup,
+    handleSaveSubscription,
+    handleRemoveSubscription,
+    handleRefreshSubscription,
   } = useProxyData(status);
+  const isMihomo = status.bin_name === 'mihomo';
+  const isSingbox = status.bin_name === 'sing-box';
+
+  const [editor, setEditor] = useState<{ open: boolean, originalName: string | null, nextName: string, url: string } | null>(null);
 
   const toggleExpand = useCallback((groupName: string) => {
     setExpanded(prev => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -69,9 +78,74 @@ export function TabProxies({ status }: TabProxiesProps) {
       });
   }, [proxies]);
 
-  const providerList = useMemo(() => {
-    return Object.entries(providers || {}).filter(([, provider]) => provider.vehicleType !== 'Compatible');
-  }, [providers]);
+  const providerList = useMemo<ProviderCardModel[]>(() => {
+    const runtimeEntries = Object.entries(providers || {}).filter(([, provider]) => provider.vehicleType !== 'Compatible');
+    const runtimeMap = new Map(runtimeEntries);
+    const subscriptionMap = new Map(subscriptions.map(subscription => [subscription.name, subscription]));
+    const names = Array.from(new Set([...subscriptionMap.keys(), ...runtimeEntries.map(([name]) => name)]));
+
+    return names.map(name => {
+      const runtimeProvider = runtimeMap.get(name);
+      return {
+        name,
+        provider: runtimeProvider || {
+          name,
+          type: 'Subscription',
+          vehicleType: isSingbox
+            ? (subscriptionMap.get(name)?.status === 'ok' ? 'Subscription' : 'Needs Attention')
+            : 'Configured',
+          updatedAt: '',
+          proxies: subscriptionMap.get(name)?.nodes || [],
+        },
+        subscription: subscriptionMap.get(name),
+        hasRuntimeProvider: Boolean(runtimeProvider),
+      };
+    });
+  }, [isSingbox, providers, subscriptions]);
+
+  const openSubscriptionEditor = useCallback((currentName?: string, currentUrl?: string) => {
+    setEditor({
+      open: true,
+      originalName: currentName || null,
+      nextName: currentName || `sub_${Date.now()}`,
+      url: currentUrl || '',
+    });
+  }, []);
+
+  const handleEditSubscription = useCallback((e: React.MouseEvent, name: string, url?: string) => {
+    e.stopPropagation();
+    void openSubscriptionEditor(name, url);
+  }, [openSubscriptionEditor]);
+
+  const handleAddSubscription = useCallback(() => {
+    void openSubscriptionEditor();
+  }, [openSubscriptionEditor]);
+
+  const handleUpdateCard = useCallback(async (e: React.MouseEvent, name: string, url?: string, hasRuntimeProvider?: boolean) => {
+    if (hasRuntimeProvider) {
+      handleUpdateProvider(e, name);
+      return;
+    }
+    e.stopPropagation();
+    if (!url) return;
+    try {
+      await handleRefreshSubscription(name, url);
+    } catch (error) {
+      notify(`刷新失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [handleRefreshSubscription, handleUpdateProvider]);
+
+  const handleDeleteSubscription = useCallback(async (e: React.MouseEvent, name: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`确定删除订阅「${name}」吗？`)) return;
+
+    try {
+      await handleRemoveSubscription(name);
+      notify('订阅已删除');
+    } catch (error) {
+      notify(`删除失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [handleRemoveSubscription]);
 
   if (!status.running) {
     return (
@@ -160,28 +234,96 @@ export function TabProxies({ status }: TabProxiesProps) {
         />
       ))}
 
-      {viewType === 'providers' && providerList.map(([name, provider]) => (
+      {viewType === 'providers' && providerList.map(({ name, provider, subscription, hasRuntimeProvider }) => (
         <ProxyProviderCard
           key={name}
           name={name}
           provider={provider}
+          subscriptionStatus={subscription?.status}
+          subscriptionWarnings={subscription?.warnings}
           latencies={latencies}
           testingOwners={testingOwners}
           testingNodes={testingNodes}
           isExpanded={expandedProviders[name]}
           isUpdating={updatingProvider === name}
+          canManageSubscription={isMihomo || isSingbox}
+          hasRuntimeProvider={hasRuntimeProvider}
+          canRefreshProvider={hasRuntimeProvider || Boolean(subscription?.url)}
+          updateTitle={hasRuntimeProvider ? '更新 provider' : '刷新订阅缓存并重生成配置'}
           onToggleExpand={toggleProviderExpand}
-          onUpdate={handleUpdateProvider}
+          onUpdate={(e, providerName) => void handleUpdateCard(e, providerName, subscription?.url, hasRuntimeProvider)}
           onTest={handleTestProvider}
           onTestNode={handleTestGroup}
+          onEditSubscription={subscription ? ((e, providerName) => handleEditSubscription(e, providerName, subscription.url)) : undefined}
+          onRemoveSubscription={subscription ? ((e, providerName) => void handleDeleteSubscription(e, providerName)) : undefined}
         />
       ))}
+
+      {viewType === 'providers' && (isMihomo || isSingbox) && (
+        <button
+          onClick={handleAddSubscription}
+          className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-5 text-sm font-semibold text-sky-600 transition-colors hover:bg-sky-100 dark:border-sky-900/70 dark:bg-sky-950/20 dark:text-sky-300 dark:hover:bg-sky-950/30"
+        >
+          <Plus size={18} />
+          <span>新增订阅</span>
+        </button>
+      )}
 
       {viewType === 'providers' && providerList.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-slate-400">
           <ZapOff size={40} className="opacity-20 mb-3" />
-          <p className="text-sm">未发现活跃的外部代理集合</p>
+          <p className="text-sm">{isMihomo || isSingbox ? '还没有已配置的订阅' : '未发现活跃的外部代理集合'}</p>
         </div>
+      )}
+
+      {editor?.open && (
+        <>
+          <div className="fixed inset-0 z-50 bg-slate-950/60 transition-opacity backdrop-blur-sm animate-in fade-in" onClick={() => setEditor(null)} />
+          <div className="fixed left-1/2 top-1/2 z-50 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-white dark:bg-slate-900 p-6 shadow-xl animate-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">{editor.originalName ? '编辑订阅' : '新增订阅'}</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5 block">订阅名称</label>
+                <input 
+                  type="text" 
+                  value={editor.nextName}
+                  onChange={(e) => setEditor({ ...editor, nextName: e.target.value })}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5 block">订阅链接</label>
+                <textarea 
+                  value={editor.url}
+                  onChange={(e) => setEditor({ ...editor, url: e.target.value })}
+                  className="w-full h-24 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:border-sky-500 resize-none break-all"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button 
+                onClick={() => setEditor(null)}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                取消
+              </button>
+              <button 
+                onClick={async () => {
+                  try {
+                    await handleSaveSubscription(editor.originalName, editor.nextName.trim(), editor.url.trim());
+                    setEditor(null);
+                  } catch(e) {
+                    notify(`订阅保存失败: ${e instanceof Error ? e.message : String(e)}`);
+                  }
+                }}
+                disabled={!editor.nextName.trim() || !editor.url.trim()}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-white bg-sky-500 hover:bg-sky-600 disabled:opacity-50 transition-colors shadow-sm"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

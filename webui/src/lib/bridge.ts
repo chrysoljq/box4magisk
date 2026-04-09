@@ -1,5 +1,5 @@
 import { exec, getPackagesInfo, listPackages, toast } from "kernelsu";
-import type { AppInfo } from '@/types/box';
+import type { AppInfo, BoxAsyncJob, BoxAsyncJobStatus } from '@/types/box';
 
 const BRIDGE_RELATIVE_PATH = "/data/adb/box/scripts/box.webui";
 
@@ -37,6 +37,40 @@ async function runApi<T = any>(args: string[]): Promise<T> {
   return payload.data as T;
 }
 
+function extractJobError(status: BoxAsyncJobStatus) {
+  const raw = String(status.error || '').trim();
+  if (!raw) return '未知错误';
+
+  try {
+    const parsed = JSON.parse(raw) as { error?: string };
+    if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    // Ignore non-JSON payloads.
+  }
+
+  const match = raw.match(/"error":"([^"]+)"/);
+  return match?.[1] || raw;
+}
+
+export async function waitForJob(jobId: string, options?: { intervalMs?: number; timeoutMs?: number }) {
+  const intervalMs = options?.intervalMs ?? 1000;
+  const timeoutMs = options?.timeoutMs ?? 120000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await boxBridge.jobStatus(jobId);
+    if (status.status === 'success') return status;
+    if (status.status === 'error') {
+      throw new Error(extractJobError(status));
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error('后台任务超时');
+}
+
 export const boxBridge = {
   status: () => runApi(["status"]),
   getConfig: () => runApi(["get-config"]),
@@ -51,11 +85,19 @@ export const boxBridge = {
   apps: () => runApi(["apps"]),
   setApps: (mode: "whitelist" | "blacklist" | "disable", value = "") => runApi(["set-apps", mode, value]),
   mihomoPanel: () => runApi(["mihomo-panel-url"]),
-  // mihomoSubscriptions: () => runApi(["mihomo-subscriptions"]),
-  // addMihomoSubscription: (name: string, url: string) => runApi(["mihomo-subscription-add", name, url]),
-  // updateMihomoSubscription: (currentName: string, nextName: string, url: string) =>
-  //   runApi(["mihomo-subscription-update", currentName, nextName, url]),
-  // removeMihomoSubscription: (name: string) => runApi(["mihomo-subscription-remove", name]),
+  mihomoSubscriptions: () => runApi(["mihomo-subscriptions"]),
+  addMihomoSubscription: (name: string, url: string) => runApi<BoxAsyncJob>(["mihomo-subscription-add", name, url]),
+  updateMihomoSubscription: (currentName: string, nextName: string, url: string) =>
+    runApi<BoxAsyncJob>(["mihomo-subscription-update", currentName, nextName, url]),
+  removeMihomoSubscription: (name: string) => runApi(["mihomo-subscription-remove", name]),
+  singboxSubscriptions: () => runApi(["singbox-subscriptions"]),
+  singboxSubscriptionViews: () => runApi(["singbox-subscription-views"]),
+  addSingboxSubscription: (name: string, url: string) => runApi<BoxAsyncJob>(["singbox-subscription-add", name, url]),
+  updateSingboxSubscription: (currentName: string, nextName: string, url: string) =>
+    runApi<BoxAsyncJob>(["singbox-subscription-update", currentName, nextName, url]),
+  removeSingboxSubscription: (name: string) => runApi(["singbox-subscription-remove", name]),
+  downloadCores: () => runApi<BoxAsyncJob>(["download-cores"]),
+  jobStatus: (jobId: string) => runApi<BoxAsyncJobStatus>(["job-status", jobId]),
 };
 
 export async function openExternalUrl(url: string) {

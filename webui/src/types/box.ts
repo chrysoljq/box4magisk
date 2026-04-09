@@ -89,6 +89,36 @@ export interface BoxConfig {
   [key: string]: string | number | boolean | undefined;
 }
 
+export interface BoxSubscription {
+  name: string;
+  url: string;
+  type?: string;
+  cache_file?: string;
+  cache_exists?: boolean;
+  cache_size?: number;
+  status?: string;
+  warnings?: string[];
+  nodes?: Array<{
+    name: string;
+    type: string;
+  }>;
+}
+
+export interface BoxAsyncJob {
+  job_id: string;
+  kind: string;
+  status: 'queued' | 'running' | 'success' | 'error';
+}
+
+export interface BoxAsyncJobStatus {
+  id: string;
+  kind: string;
+  status: 'queued' | 'running' | 'success' | 'error';
+  message?: string;
+  error?: string;
+  updated_at?: string;
+}
+
 export interface BoxControllerState {
   loading: boolean;
   status: BoxStatus;
@@ -97,6 +127,7 @@ export interface BoxControllerState {
   actionLoading: string | null;
   hasChanges: boolean;
   handleServiceAction: (action: string) => Promise<void>;
+  handleTproxyAction: (action: 'restart') => Promise<void>;
   handleToggle: (key: string, value: boolean) => void;
   handleChange: <K extends keyof BoxConfig>(key: K, value: BoxConfig[K]) => void;
   handleSaveAndApply: () => Promise<void>;
