@@ -1,5 +1,5 @@
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    mihomo2singbox::run_cli()
+    boxmanager::run_cli()
 }

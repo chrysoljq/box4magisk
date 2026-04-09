@@ -1,5 +1,5 @@
 [package]
-name = "mihomo2singbox"
+name = "boxmanager"
 version = "0.1.0"
 edition = "2024"
 

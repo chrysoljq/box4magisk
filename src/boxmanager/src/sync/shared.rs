@@ -5,9 +5,13 @@ use serde::Serialize;
 pub struct ProviderEntry {
     pub name: String,
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_time: Option<String>,
 }
 
-pub(super) const SINGBOX_SUBSCRIPTIONS_KEY: &str = "box_subscriptions";
+pub(super) const SINGBOX_PROVIDERS_KEY: &str = "outbound_providers";
 
 pub(super) fn validate_provider_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() || name.contains(['\n', '\r', '\t']) {
@@ -38,6 +42,8 @@ pub(super) fn upsert_entry(
                 next_entries.push(ProviderEntry {
                     name: next_name.to_string(),
                     url: url.to_string(),
+                    provider_type: entry.provider_type.clone(),
+                    update_time: entry.update_time.clone(),
                 });
                 updated = true;
             }
@@ -53,6 +59,8 @@ pub(super) fn upsert_entry(
         next_entries.push(ProviderEntry {
             name: next_name.to_string(),
             url: url.to_string(),
+            provider_type: Some("remote".to_string()),
+            update_time: None,
         });
     }
 

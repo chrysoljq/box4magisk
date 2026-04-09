@@ -1,18 +1,18 @@
-name: build-mihomo2singbox
+name: build-boxmanager
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - ".github/workflows/build-mihomo2singbox.yml"
-      - "src/mihomo2singbox/**"
+      - ".github/workflows/build-boxmanager.yml"
+      - "src/boxmanager/**"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: src/mihomo2singbox
+        working-directory: src/boxmanager
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src/mihomo2singbox
+          workspaces: src/boxmanager
 
       - name: Build Android arm64 binary
         env:
@@ -48,5 +48,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mihomo2singbox-android-arm64
-          path: src/mihomo2singbox/target/aarch64-linux-android/release/mihomo2singbox
+          name: boxmanager-android-arm64
+          path: src/boxmanager/target/aarch64-linux-android/release/boxmanager

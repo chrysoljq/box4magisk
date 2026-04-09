@@ -32,7 +32,7 @@ struct RenderCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox sync-mihomo-providers")]
+#[command(name = "boxmanager sync-mihomo-providers")]
 struct SyncMihomoProvidersCli {
     #[arg(long)]
     config: PathBuf,
@@ -42,14 +42,14 @@ struct SyncMihomoProvidersCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox list-mihomo-providers")]
+#[command(name = "boxmanager list-mihomo-providers")]
 struct ListMihomoProvidersCli {
     #[arg(long)]
     config: PathBuf,
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox set-mihomo-provider")]
+#[command(name = "boxmanager set-mihomo-provider")]
 struct SetMihomoProviderCli {
     #[arg(long)]
     config: PathBuf,
@@ -65,7 +65,7 @@ struct SetMihomoProviderCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox remove-mihomo-provider")]
+#[command(name = "boxmanager remove-mihomo-provider")]
 struct RemoveMihomoProviderCli {
     #[arg(long)]
     config: PathBuf,
@@ -75,7 +75,7 @@ struct RemoveMihomoProviderCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox sync-singbox-subscriptions")]
+#[command(name = "boxmanager sync-singbox-subscriptions")]
 struct SyncSingboxSubscriptionsCli {
     #[arg(long)]
     config: PathBuf,
@@ -85,14 +85,14 @@ struct SyncSingboxSubscriptionsCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox list-singbox-subscriptions")]
+#[command(name = "boxmanager list-singbox-subscriptions")]
 struct ListSingboxSubscriptionsCli {
     #[arg(long)]
     config: PathBuf,
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox set-singbox-subscription")]
+#[command(name = "boxmanager set-singbox-subscription")]
 struct SetSingboxSubscriptionCli {
     #[arg(long)]
     config: PathBuf,
@@ -108,7 +108,7 @@ struct SetSingboxSubscriptionCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox remove-singbox-subscription")]
+#[command(name = "boxmanager remove-singbox-subscription")]
 struct RemoveSingboxSubscriptionCli {
     #[arg(long)]
     config: PathBuf,
@@ -118,7 +118,7 @@ struct RemoveSingboxSubscriptionCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox build-singbox-config")]
+#[command(name = "boxmanager build-singbox-config")]
 struct BuildSingboxConfigCli {
     #[arg(long)]
     config: PathBuf,
@@ -131,7 +131,7 @@ struct BuildSingboxConfigCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mihomo2singbox inspect-singbox-subscriptions")]
+#[command(name = "boxmanager inspect-singbox-subscriptions")]
 struct InspectSingboxSubscriptionsCli {
     #[arg(long)]
     config: PathBuf,

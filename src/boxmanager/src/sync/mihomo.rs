@@ -57,6 +57,8 @@ pub fn list_mihomo_providers(config_path: &Path) -> Result<Vec<ProviderEntry>> {
             entries.push(ProviderEntry {
                 name: provider.name,
                 url,
+                provider_type: None,
+                update_time: None,
             });
         }
     }
@@ -539,10 +541,14 @@ proxy-groups:
                 ProviderEntry {
                     name: "provider1".to_string(),
                     url: "https://one.example".to_string(),
+                    provider_type: None,
+                    update_time: None,
                 },
                 ProviderEntry {
                     name: "provider2".to_string(),
                     url: "https://two.example".to_string(),
+                    provider_type: None,
+                    update_time: None,
                 }
             ]
         );

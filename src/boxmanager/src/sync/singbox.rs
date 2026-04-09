@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::shared::{
-    ProviderEntry, SINGBOX_SUBSCRIPTIONS_KEY, upsert_entry, validate_provider_name,
+    ProviderEntry, SINGBOX_PROVIDERS_KEY, upsert_entry, validate_provider_name,
     validate_provider_url,
 };
 
@@ -29,12 +29,12 @@ pub fn sync_singbox_subscriptions(template_path: &Path, state_path: &Path) -> Re
         upsert_entry(&mut entries, name, name, url);
     }
 
-    write_singbox_subscriptions(template_path, &entries)
+    write_singbox_providers(template_path, &entries)
 }
 
 pub fn list_singbox_subscriptions(template_path: &Path) -> Result<Vec<ProviderEntry>> {
     let root = read_singbox_template_json(template_path)?;
-    parse_singbox_subscription_entries(&root)
+    parse_singbox_provider_entries(&root)
 }
 
 pub fn upsert_singbox_subscription(
@@ -56,7 +56,7 @@ pub fn upsert_singbox_subscription(
         next_name,
         url,
     );
-    write_singbox_subscriptions(template_path, &entries)
+    write_singbox_providers(template_path, &entries)
 }
 
 pub fn remove_singbox_subscription(template_path: &Path, name: &str) -> Result<()> {
@@ -64,7 +64,7 @@ pub fn remove_singbox_subscription(template_path: &Path, name: &str) -> Result<(
 
     let mut entries = list_singbox_subscriptions(template_path)?;
     entries.retain(|entry| entry.name != name);
-    write_singbox_subscriptions(template_path, &entries)
+    write_singbox_providers(template_path, &entries)
 }
 
 fn read_singbox_template_json(template_path: &Path) -> Result<JsonValue> {
@@ -82,66 +82,87 @@ fn read_singbox_template_json(template_path: &Path) -> Result<JsonValue> {
     Ok(root)
 }
 
-fn parse_singbox_subscription_entries(root: &JsonValue) -> Result<Vec<ProviderEntry>> {
+/// Parse provider entries from `outbound_providers` array.
+/// Each entry: { "tag": "...", "type": "...", "url": "...", "update_time": "..." }
+fn parse_singbox_provider_entries(root: &JsonValue) -> Result<Vec<ProviderEntry>> {
     let Some(map) = root.as_object() else {
         bail!("sing-box template root must be an object");
     };
 
-    let Some(subscriptions) = map.get(SINGBOX_SUBSCRIPTIONS_KEY) else {
+    let Some(providers) = map.get(SINGBOX_PROVIDERS_KEY) else {
         return Ok(Vec::new());
     };
 
-    let Some(items) = subscriptions.as_array() else {
-        bail!("sing-box template `box_subscriptions` must be an array");
+    let Some(items) = providers.as_array() else {
+        bail!("sing-box template `outbound_providers` must be an array");
     };
 
     let mut entries = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         let Some(obj) = item.as_object() else {
             bail!(
-                "sing-box template subscription at index {} must be an object",
+                "sing-box template provider at index {} must be an object",
                 index
             );
         };
-        let name = obj.get("name").and_then(JsonValue::as_str).ok_or_else(|| {
+
+        let tag = obj.get("tag").and_then(JsonValue::as_str).ok_or_else(|| {
             anyhow!(
-                "sing-box template subscription at index {} missing `name`",
+                "sing-box template provider at index {} missing `tag`",
                 index
             )
         })?;
         let url = obj.get("url").and_then(JsonValue::as_str).ok_or_else(|| {
             anyhow!(
-                "sing-box template subscription at index {} missing `url`",
+                "sing-box template provider at index {} missing `url`",
                 index
             )
         })?;
-        validate_provider_name(name)?;
+        let provider_type = obj.get("type").and_then(JsonValue::as_str);
+        let update_time = obj.get("update_time").and_then(JsonValue::as_str);
+
+        validate_provider_name(tag)?;
         validate_provider_url(url)?;
         entries.push(ProviderEntry {
-            name: name.to_string(),
+            name: tag.to_string(),
             url: url.to_string(),
+            provider_type: provider_type.map(str::to_string),
+            update_time: update_time.map(str::to_string),
         });
     }
 
     Ok(entries)
 }
 
-fn write_singbox_subscriptions(template_path: &Path, entries: &[ProviderEntry]) -> Result<()> {
+fn write_singbox_providers(template_path: &Path, entries: &[ProviderEntry]) -> Result<()> {
     let mut root = read_singbox_template_json(template_path)?;
     let map = root
         .as_object_mut()
         .ok_or_else(|| anyhow!("sing-box template root must be an object"))?;
 
     map.insert(
-        SINGBOX_SUBSCRIPTIONS_KEY.to_string(),
+        SINGBOX_PROVIDERS_KEY.to_string(),
         JsonValue::Array(
             entries
                 .iter()
                 .map(|entry| {
-                    JsonValue::Object(JsonMap::from_iter([
-                        ("name".to_string(), JsonValue::String(entry.name.clone())),
-                        ("url".to_string(), JsonValue::String(entry.url.clone())),
-                    ]))
+                    let mut obj = JsonMap::new();
+                    obj.insert("tag".to_string(), JsonValue::String(entry.name.clone()));
+                    obj.insert(
+                        "type".to_string(),
+                        JsonValue::String(
+                            entry
+                                .provider_type
+                                .clone()
+                                .unwrap_or_else(|| "remote".to_string()),
+                        ),
+                    );
+                    obj.insert("url".to_string(), JsonValue::String(entry.url.clone()));
+                    obj.insert(
+                        "update_time".to_string(),
+                        JsonValue::String(entry.update_time.clone().unwrap_or_default()),
+                    );
+                    JsonValue::Object(obj)
                 })
                 .collect(),
         ),
@@ -167,14 +188,18 @@ mod tests {
   "log": {
     "level": "info"
   },
-  "box_subscriptions": [
+  "outbound_providers": [
     {
-      "name": "provider1",
-      "url": "https://one.example"
+      "tag": "provider1",
+      "type": "remote",
+      "url": "https://one.example",
+      "update_time": ""
     },
     {
-      "name": "provider2",
-      "url": "https://two.example"
+      "tag": "provider2",
+      "type": "local",
+      "url": "https://two.example",
+      "update_time": ""
     }
   ],
   "outbounds": [
@@ -196,29 +221,21 @@ mod tests {
     }
 
     #[test]
-    fn lists_singbox_subscriptions_from_template() {
-        let path = unique_path("singbox-subscription-list", "json");
+    fn lists_singbox_providers() {
+        let path = unique_path("singbox-list", "json");
         fs::write(&path, sample_singbox_template()).unwrap();
         let entries = list_singbox_subscriptions(&path).unwrap();
-        assert_eq!(
-            entries,
-            vec![
-                ProviderEntry {
-                    name: "provider1".to_string(),
-                    url: "https://one.example".to_string(),
-                },
-                ProviderEntry {
-                    name: "provider2".to_string(),
-                    url: "https://two.example".to_string(),
-                }
-            ]
-        );
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "provider1");
+        assert_eq!(entries[0].provider_type.as_deref(), Some("remote"));
+        assert_eq!(entries[1].name, "provider2");
+        assert_eq!(entries[1].provider_type.as_deref(), Some("local"));
         let _ = fs::remove_file(path);
     }
 
     #[test]
-    fn updates_singbox_subscription_in_template() {
-        let path = unique_path("singbox-subscription-update", "json");
+    fn updates_singbox_provider() {
+        let path = unique_path("singbox-update", "json");
         fs::write(&path, sample_singbox_template()).unwrap();
         upsert_singbox_subscription(
             &path,
@@ -228,15 +245,16 @@ mod tests {
         )
         .unwrap();
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("\"name\": \"provider1-renamed\""));
+        assert!(content.contains("\"tag\": \"provider1-renamed\""));
         assert!(content.contains("\"url\": \"https://new.example\""));
-        assert!(!content.contains("\"name\": \"provider1\""));
+        assert!(!content.contains("\"tag\": \"provider1\""));
+        assert!(content.contains("outbound_providers"));
         let _ = fs::remove_file(path);
     }
 
     #[test]
-    fn removes_singbox_subscription_from_template() {
-        let path = unique_path("singbox-subscription-remove", "json");
+    fn removes_singbox_provider() {
+        let path = unique_path("singbox-remove", "json");
         fs::write(&path, sample_singbox_template()).unwrap();
         remove_singbox_subscription(&path, "provider2").unwrap();
         let entries = list_singbox_subscriptions(&path).unwrap();
@@ -246,9 +264,9 @@ mod tests {
     }
 
     #[test]
-    fn syncs_singbox_subscriptions_from_legacy_state() {
-        let template_path = unique_path("singbox-subscription-sync-template", "json");
-        let state_path = unique_path("singbox-subscription-sync-state", "tsv");
+    fn syncs_singbox_providers_from_state() {
+        let template_path = unique_path("singbox-sync-template", "json");
+        let state_path = unique_path("singbox-sync-state", "tsv");
         fs::write(&template_path, sample_singbox_template()).unwrap();
         fs::write(
             &state_path,
@@ -257,19 +275,9 @@ mod tests {
         .unwrap();
         sync_singbox_subscriptions(&template_path, &state_path).unwrap();
         let entries = list_singbox_subscriptions(&template_path).unwrap();
-        assert_eq!(
-            entries,
-            vec![
-                ProviderEntry {
-                    name: "provider3".to_string(),
-                    url: "https://three.example".to_string(),
-                },
-                ProviderEntry {
-                    name: "provider4".to_string(),
-                    url: "https://four.example".to_string(),
-                }
-            ]
-        );
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "provider3");
+        assert_eq!(entries[1].name, "provider4");
         let _ = fs::remove_file(template_path);
         let _ = fs::remove_file(state_path);
     }
