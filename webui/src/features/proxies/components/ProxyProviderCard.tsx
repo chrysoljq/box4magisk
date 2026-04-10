@@ -7,6 +7,7 @@ import { formatBytes, formatDate, formatRelativeTime, getLatencyStyle } from '..
 interface ProxyProviderCardProps {
   name: string;
   provider: ProxyProvider;
+  providerBadgeLabel?: string;
   subscriptionStatus?: string;
   subscriptionWarnings?: string[];
   latencies: Record<string, number>;
@@ -30,6 +31,7 @@ export const ProxyProviderCard = React.memo((props: ProxyProviderCardProps) => {
   const {
     name,
     provider,
+    providerBadgeLabel,
     subscriptionStatus,
     subscriptionWarnings,
     latencies,
@@ -61,7 +63,7 @@ export const ProxyProviderCard = React.memo((props: ProxyProviderCardProps) => {
           <div className="flex items-center space-x-2">
             <h3 className="font-bold text-[17px] text-slate-900 dark:text-slate-100 truncate leading-tight">{name}</h3>
             <span className="text-[10px] text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider shrink-0">
-              {provider.vehicleType || 'Subscription'}
+              {providerBadgeLabel || provider.vehicleType || 'Subscription'}
             </span>
           </div>
         </div>

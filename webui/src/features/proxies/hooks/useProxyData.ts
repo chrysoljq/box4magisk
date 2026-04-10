@@ -141,7 +141,8 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
       if (isMounted.current) notify(`切换失败: ${e instanceof Error ? e.message : String(e)}`);
     }
   }, [client, isMounted, proxies]);
-
+  
+  // SHOULD_FIX: 这里应该通过clash api查看有哪些模式
   const handleChangeMode = useCallback(async (mode: 'rule' | 'global' | 'direct') => {
     if (currentMode === mode) return;
     const oldMode = currentMode;

@@ -30,6 +30,7 @@ pub struct SingboxSubscriptionNodeView {
 pub struct SingboxSubscriptionView {
     pub name: String,
     pub url: String,
+    pub r#type: Option<String>,
     pub cache_file: String,
     pub cache_exists: bool,
     pub cache_size: u64,
@@ -225,6 +226,7 @@ pub fn inspect_singbox_subscriptions(
         items.push(SingboxSubscriptionView {
             name: subscription.name,
             url: subscription.url,
+            r#type: subscription.provider_type,
             cache_file: cache_file.display().to_string(),
             cache_exists,
             cache_size,

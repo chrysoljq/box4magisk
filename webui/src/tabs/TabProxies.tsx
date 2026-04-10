@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Activity, Plus, RefreshCw, Server, ServerOff, ZapOff } from 'lucide-react';
+import { Activity, Plus, RefreshCw, Server, ServerOff, TriangleAlert, ZapOff } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { ProxyGroupCard } from '@/features/proxies/components/ProxyGroupCard';
 import { ProxyProviderCard } from '@/features/proxies/components/ProxyProviderCard';
@@ -45,6 +45,7 @@ export function TabProxies({ status }: TabProxiesProps) {
   const isSingbox = status.bin_name === 'sing-box';
 
   const [editor, setEditor] = useState<{ open: boolean, originalName: string | null, nextName: string, url: string, type: 'remote' | 'local' } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const toggleExpand = useCallback((groupName: string) => {
     setExpanded(prev => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -65,18 +66,19 @@ export function TabProxies({ status }: TabProxiesProps) {
   }, [setGroupSorts]);
 
   const proxyGroups = useMemo(() => {
-    if (!proxies) return [];
-    const globalOrder = proxies.GLOBAL?.all || [];
-    return Object.keys(proxies)
-      .filter(name => GROUP_TYPES.includes(proxies[name].type))
-      .sort((a, b) => {
-        let idxA = globalOrder.indexOf(a);
-        let idxB = globalOrder.indexOf(b);
-        if (idxA === -1) idxA = 999;
-        if (idxB === -1) idxB = 999;
-        return idxA - idxB;
-      });
-  }, [proxies]);
+  if (!proxies) return [];
+  const globalOrder = proxies.GLOBAL?.all || [];
+  
+  const orderMap = new Map(globalOrder.map((name, index) => [name, index]));
+  
+  return Object.keys(proxies)
+    .filter(name => GROUP_TYPES.includes(proxies[name].type))
+    .sort((a, b) => {
+      const idxA = orderMap.get(a) ?? 999;
+      const idxB = orderMap.get(b) ?? 999;
+      return idxA - idxB;
+    });
+}, [proxies]);
 
   const providerList = useMemo<ProviderCardModel[]>(() => {
     const runtimeEntries = Object.entries(providers || {}).filter(([, provider]) => provider.vehicleType !== 'Compatible');
@@ -102,6 +104,14 @@ export function TabProxies({ status }: TabProxiesProps) {
       };
     });
   }, [isSingbox, providers, subscriptions]);
+
+  const getProviderBadgeLabel = useCallback((subscriptionType?: string, fallback?: string) => {
+    if (!isSingbox) return fallback || 'Subscription';
+    if (subscriptionType === 'local') return 'Local';
+    if (subscriptionType === 'remote') return 'Remote';
+    if (fallback && fallback !== 'Subscription') return fallback;
+    return 'Remote';
+  }, [isSingbox]);
 
   const openSubscriptionEditor = useCallback((currentName?: string, currentUrl?: string, currentType?: 'remote' | 'local') => {
     setEditor({
@@ -136,17 +146,21 @@ export function TabProxies({ status }: TabProxiesProps) {
     }
   }, [handleRefreshSubscription, handleUpdateProvider]);
 
-  const handleDeleteSubscription = useCallback(async (e: React.MouseEvent, name: string) => {
+  const handleDeleteSubscription = useCallback((e: React.MouseEvent, name: string) => {
     e.stopPropagation();
-    if (!window.confirm(`确定删除订阅「${name}」吗？`)) return;
+    setDeleteTarget(name);
+  }, []);
 
+  const confirmDeleteSubscription = useCallback(async () => {
+    if (!deleteTarget) return;
     try {
-      await handleRemoveSubscription(name);
+      await handleRemoveSubscription(deleteTarget);
       notify('订阅已删除');
+      setDeleteTarget(null);
     } catch (error) {
       notify(`删除失败: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [handleRemoveSubscription]);
+  }, [deleteTarget, handleRemoveSubscription]);
 
   if (!status.running) {
     return (
@@ -240,6 +254,7 @@ export function TabProxies({ status }: TabProxiesProps) {
           key={name}
           name={name}
           provider={provider}
+          providerBadgeLabel={getProviderBadgeLabel(subscription?.type, provider.vehicleType)}
           subscriptionStatus={subscription?.status}
           subscriptionWarnings={subscription?.warnings}
           latencies={latencies}
@@ -249,8 +264,12 @@ export function TabProxies({ status }: TabProxiesProps) {
           isUpdating={updatingProvider === name}
           canManageSubscription={isMihomo || isSingbox}
           hasRuntimeProvider={hasRuntimeProvider}
-          canRefreshProvider={hasRuntimeProvider || Boolean(subscription?.url)}
-          updateTitle={hasRuntimeProvider ? '更新 provider' : '刷新订阅缓存并重生成配置'}
+          canRefreshProvider={hasRuntimeProvider || (isSingbox ? subscription?.type === 'remote' : Boolean(subscription?.url))}
+          updateTitle={
+            isSingbox && subscription?.type === 'local'
+              ? '本地订阅不支持刷新'
+              : (hasRuntimeProvider ? '更新 provider' : '刷新订阅缓存并重生成配置')
+          }
           onToggleExpand={toggleProviderExpand}
           onUpdate={(e, providerName) => void handleUpdateCard(e, providerName, subscription?.url, hasRuntimeProvider)}
           onTest={handleTestProvider}
@@ -261,23 +280,14 @@ export function TabProxies({ status }: TabProxiesProps) {
       ))}
 
       {viewType === 'providers' && (isMihomo || isSingbox) && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           <button
-            onClick={() => handleAddSubscription('remote')}
+            onClick={() => handleAddSubscription()}
             className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-5 text-sm font-semibold text-sky-600 transition-colors hover:bg-sky-100 dark:border-sky-900/70 dark:bg-sky-950/20 dark:text-sky-300 dark:hover:bg-sky-950/30"
           >
             <Plus size={18} />
-            <span>新增远程订阅</span>
+            <span>新增订阅</span>
           </button>
-          {isSingbox && (
-            <button
-              onClick={() => handleAddSubscription('local')}
-              className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-emerald-200 bg-emerald-50/70 px-5 py-5 text-sm font-semibold text-emerald-600 transition-colors hover:bg-emerald-100 dark:border-emerald-900/70 dark:bg-emerald-950/20 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
-            >
-              <Plus size={18} />
-              <span>新增本地订阅</span>
-            </button>
-          )}
         </div>
       )}
 
@@ -291,7 +301,7 @@ export function TabProxies({ status }: TabProxiesProps) {
       {editor?.open && (
         <>
           <div className="fixed inset-0 z-50 bg-slate-950/60 transition-opacity backdrop-blur-sm animate-in fade-in" onClick={() => setEditor(null)} />
-          <div className="fixed left-1/2 top-1/2 z-50 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-white dark:bg-slate-900 p-6 shadow-xl animate-in zoom-in-95 duration-200">
+          <div className="fixed left-1/2 top-1/2 z-50 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-slate-200/80 bg-white/95 p-6 shadow-xl backdrop-blur dark:border-slate-800 dark:bg-slate-900/95 animate-in zoom-in-95 duration-200">
             <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">{editor.originalName ? '编辑订阅' : '新增订阅'}</h3>
             <div className="space-y-4">
               {isSingbox && (
@@ -355,6 +365,41 @@ export function TabProxies({ status }: TabProxiesProps) {
                 className="flex-1 py-2.5 rounded-xl font-semibold text-white bg-sky-500 hover:bg-sky-600 disabled:opacity-50 transition-colors shadow-sm"
               >
                 保存
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {deleteTarget && (
+        <>
+          <div className="fixed inset-0 z-50 bg-slate-950/60 transition-opacity backdrop-blur-sm animate-in fade-in" onClick={() => setDeleteTarget(null)} />
+          <div className="fixed left-1/2 top-1/2 z-50 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-rose-200/70 bg-white/95 p-6 shadow-xl backdrop-blur dark:border-rose-900/60 dark:bg-slate-900/95 animate-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-rose-50 text-rose-500 dark:bg-rose-500/10 dark:text-rose-300">
+                <TriangleAlert size={18} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">删除订阅</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  确定删除订阅
+                  <span className="mx-1 font-semibold text-slate-900 dark:text-slate-100">「{deleteTarget}」</span>
+                  吗？删除后将从当前核心配置中移除。
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => { void confirmDeleteSubscription(); }}
+                className="flex-1 py-2.5 rounded-xl font-semibold text-white bg-rose-500 hover:bg-rose-600 transition-colors shadow-sm"
+              >
+                确认删除
               </button>
             </div>
           </div>
