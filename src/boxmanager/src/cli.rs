@@ -105,6 +105,9 @@ struct SetSingboxSubscriptionCli {
 
     #[arg(long)]
     current_name: Option<String>,
+
+    #[arg(long, default_value = "remote")]
+    provider_type: String,
 }
 
 #[derive(Debug, Parser)]
@@ -231,6 +234,7 @@ pub fn run() -> Result<()> {
             cli.current_name.as_deref(),
             &cli.name,
             &cli.url,
+            &cli.provider_type,
         )?;
         println!(
             "{}",

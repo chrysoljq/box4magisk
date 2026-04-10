@@ -118,16 +118,36 @@ list_singbox_subscriptions_json() {
     printf '%s' "$entries"
 }
 
-save_mihomo_subscription_entry() {
+save_singbox_subscription_entry() {
     local current_name="$1"
     local next_name="$2"
     local url="$3"
+    local subscription_type="${4:-remote}"
+    local old_cache_file=""
+    local cache_file=""
 
-    migrate_legacy_mihomo_subscriptions || emit_error "failed to migrate mihomo subscriptions" "mihomo-subscriptions"
-    run_mihomo_provider_tool set-mihomo-provider \
+    validate_subscription_name "$next_name" "singbox-subscriptions"
+    case "$subscription_type" in
+        remote|local) ;;
+        *) emit_error "invalid sing-box subscription type: $subscription_type" "singbox-subscriptions" ;;
+    esac
+
+    if [ "$subscription_type" = "remote" ]; then
+        cache_file="$(download_singbox_subscription_cache "$next_name" "$url")" \
+            || emit_error "failed to download subscription: $url" "singbox-subscriptions"
+    elif [ "$current_name" != "$next_name" ]; then
+        old_cache_file="$(singbox_subscription_cache_file "$current_name")"
+        rm -f "$old_cache_file"
+    fi
+
+    run_singbox_subscription_tool set-singbox-subscription \
         --current-name "$current_name" \
         --name "$next_name" \
-        --url "$url" >/dev/null
+        --url "$url" \
+        --provider-type "$subscription_type" >/dev/null
+    build_singbox_runtime_config >/dev/null
+
+    printf '%s' "$cache_file"
 }
 
 remove_mihomo_subscription_entry() {
@@ -225,16 +245,14 @@ cmd_singbox_subscription_add() {
 cmd_sync_singbox_subscription_add() {
     local name="$1"
     local url="$2"
+    local subscription_type="${3:-remote}"
     local cache_file
 
     validate_subscription_name "$name" "singbox-subscription-add"
     [ -n "$url" ] || emit_error "missing subscription url" "singbox-subscription-add"
 
-    cache_file="$(download_singbox_subscription_cache "$name" "$url")" \
-        || emit_error "failed to download subscription: $url" "singbox-subscription-add"
-    run_singbox_subscription_tool set-singbox-subscription --name "$name" --url "$url" >/dev/null
-    build_singbox_runtime_config >/dev/null
-    emit_ok "singbox-subscription-add" "{\"name\":\"$(json_escape "$name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"$(json_escape "$cache_file")\"}"
+    cache_file="$(save_singbox_subscription_entry "$name" "$name" "$url" "$subscription_type")"
+    emit_ok "singbox-subscription-add" "{\"name\":\"$(json_escape "$name")\",\"url\":\"$(json_escape "$url")\",\"type\":\"$(json_escape "$subscription_type")\",\"cache_file\":\"$(json_escape "$cache_file")\"}"
 }
 
 cmd_singbox_subscription_update() {
@@ -245,22 +263,16 @@ cmd_sync_singbox_subscription_update() {
     local current_name="$1"
     local next_name="$2"
     local url="$3"
-    local old_cache_file new_cache_file
+    local subscription_type="${4:-remote}"
+    local cache_file
 
     validate_subscription_name "$current_name" "singbox-subscription-update"
     validate_subscription_name "$next_name" "singbox-subscription-update"
     [ -n "$url" ] || emit_error "missing subscription url" "singbox-subscription-update"
 
-    new_cache_file="$(download_singbox_subscription_cache "$next_name" "$url")" \
-        || emit_error "failed to download subscription: $url" "singbox-subscription-update"
-    run_singbox_subscription_tool set-singbox-subscription --current-name "$current_name" --name "$next_name" --url "$url" >/dev/null
-    if [ "$current_name" != "$next_name" ]; then
-        old_cache_file="$(singbox_subscription_cache_file "$current_name")"
-        rm -f "$old_cache_file"
-    fi
-    build_singbox_runtime_config >/dev/null
+    cache_file="$(save_singbox_subscription_entry "$current_name" "$next_name" "$url" "$subscription_type")"
 
-    emit_ok "singbox-subscription-update" "{\"name\":\"$(json_escape "$next_name")\",\"url\":\"$(json_escape "$url")\",\"cache_file\":\"$(json_escape "$new_cache_file")\"}"
+    emit_ok "singbox-subscription-update" "{\"name\":\"$(json_escape "$next_name")\",\"url\":\"$(json_escape "$url")\",\"type\":\"$(json_escape "$subscription_type")\",\"cache_file\":\"$(json_escape "$cache_file")\"}"
 }
 
 cmd_singbox_subscription_remove() {

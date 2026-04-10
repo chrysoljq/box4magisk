@@ -27,11 +27,19 @@ pub(super) fn validate_provider_url(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub(super) fn validate_provider_type(provider_type: &str) -> anyhow::Result<()> {
+    match provider_type {
+        "remote" | "local" => Ok(()),
+        _ => bail!("provider type must be `remote` or `local`"),
+    }
+}
+
 pub(super) fn upsert_entry(
     entries: &mut Vec<ProviderEntry>,
     current_name: &str,
     next_name: &str,
     url: &str,
+    provider_type: &str,
 ) {
     let mut updated = false;
     let mut next_entries = Vec::with_capacity(entries.len() + 1);
@@ -42,7 +50,7 @@ pub(super) fn upsert_entry(
                 next_entries.push(ProviderEntry {
                     name: next_name.to_string(),
                     url: url.to_string(),
-                    provider_type: entry.provider_type.clone(),
+                    provider_type: Some(provider_type.to_string()),
                     update_time: entry.update_time.clone(),
                 });
                 updated = true;
@@ -59,7 +67,7 @@ pub(super) fn upsert_entry(
         next_entries.push(ProviderEntry {
             name: next_name.to_string(),
             url: url.to_string(),
-            provider_type: Some("remote".to_string()),
+            provider_type: Some(provider_type.to_string()),
             update_time: None,
         });
     }

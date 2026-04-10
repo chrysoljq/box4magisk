@@ -92,9 +92,9 @@ export const boxBridge = {
   removeMihomoSubscription: (name: string) => runApi(["mihomo-subscription-remove", name]),
   singboxSubscriptions: () => runApi(["singbox-subscriptions"]),
   singboxSubscriptionViews: () => runApi(["singbox-subscription-views"]),
-  addSingboxSubscription: (name: string, url: string) => runApi<BoxAsyncJob>(["singbox-subscription-add", name, url]),
-  updateSingboxSubscription: (currentName: string, nextName: string, url: string) =>
-    runApi<BoxAsyncJob>(["singbox-subscription-update", currentName, nextName, url]),
+  addSingboxSubscription: (name: string, url: string, type: 'remote' | 'local' = 'remote') => runApi<BoxAsyncJob>(["singbox-subscription-add", name, url, type]),
+  updateSingboxSubscription: (currentName: string, nextName: string, url: string, type: 'remote' | 'local' = 'remote') =>
+    runApi<BoxAsyncJob>(["singbox-subscription-update", currentName, nextName, url, type]),
   removeSingboxSubscription: (name: string) => runApi(["singbox-subscription-remove", name]),
   downloadCores: () => runApi<BoxAsyncJob>(["download-cores"]),
   jobStatus: (jobId: string) => runApi<BoxAsyncJobStatus>(["job-status", jobId]),

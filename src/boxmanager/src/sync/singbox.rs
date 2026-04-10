@@ -6,7 +6,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::shared::{
     ProviderEntry, SINGBOX_PROVIDERS_KEY, upsert_entry, validate_provider_name,
-    validate_provider_url,
+    validate_provider_type, validate_provider_url,
 };
 
 pub fn sync_singbox_subscriptions(template_path: &Path, state_path: &Path) -> Result<()> {
@@ -26,7 +26,7 @@ pub fn sync_singbox_subscriptions(template_path: &Path, state_path: &Path) -> Re
         };
         validate_provider_name(name)?;
         validate_provider_url(url)?;
-        upsert_entry(&mut entries, name, name, url);
+        upsert_entry(&mut entries, name, name, url, "remote");
     }
 
     write_singbox_providers(template_path, &entries)
@@ -42,9 +42,11 @@ pub fn upsert_singbox_subscription(
     current_name: Option<&str>,
     next_name: &str,
     url: &str,
+    provider_type: &str,
 ) -> Result<()> {
     validate_provider_name(next_name)?;
     validate_provider_url(url)?;
+    validate_provider_type(provider_type)?;
     if let Some(current_name) = current_name {
         validate_provider_name(current_name)?;
     }
@@ -55,6 +57,7 @@ pub fn upsert_singbox_subscription(
         current_name.unwrap_or(next_name),
         next_name,
         url,
+        provider_type,
     );
     write_singbox_providers(template_path, &entries)
 }
@@ -242,11 +245,13 @@ mod tests {
             Some("provider1"),
             "provider1-renamed",
             "https://new.example",
+            "local",
         )
         .unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("\"tag\": \"provider1-renamed\""));
         assert!(content.contains("\"url\": \"https://new.example\""));
+        assert!(content.contains("\"type\": \"local\""));
         assert!(!content.contains("\"tag\": \"provider1\""));
         assert!(content.contains("outbound_providers"));
         let _ = fs::remove_file(path);

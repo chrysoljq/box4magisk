@@ -92,7 +92,8 @@ export interface BoxConfig {
 export interface BoxSubscription {
   name: string;
   url: string;
-  type?: string;
+  type?: 'remote' | 'local' | string;
+  update_time?: string;
   cache_file?: string;
   cache_exists?: boolean;
   cache_size?: number;

@@ -44,7 +44,7 @@ export function TabProxies({ status }: TabProxiesProps) {
   const isMihomo = status.bin_name === 'mihomo';
   const isSingbox = status.bin_name === 'sing-box';
 
-  const [editor, setEditor] = useState<{ open: boolean, originalName: string | null, nextName: string, url: string } | null>(null);
+  const [editor, setEditor] = useState<{ open: boolean, originalName: string | null, nextName: string, url: string, type: 'remote' | 'local' } | null>(null);
 
   const toggleExpand = useCallback((groupName: string) => {
     setExpanded(prev => ({ ...prev, [groupName]: !prev[groupName] }));
@@ -103,22 +103,23 @@ export function TabProxies({ status }: TabProxiesProps) {
     });
   }, [isSingbox, providers, subscriptions]);
 
-  const openSubscriptionEditor = useCallback((currentName?: string, currentUrl?: string) => {
+  const openSubscriptionEditor = useCallback((currentName?: string, currentUrl?: string, currentType?: 'remote' | 'local') => {
     setEditor({
       open: true,
       originalName: currentName || null,
       nextName: currentName || `sub_${Date.now()}`,
       url: currentUrl || '',
+      type: currentType || 'remote',
     });
   }, []);
 
-  const handleEditSubscription = useCallback((e: React.MouseEvent, name: string, url?: string) => {
+  const handleEditSubscription = useCallback((e: React.MouseEvent, name: string, url?: string, type?: 'remote' | 'local') => {
     e.stopPropagation();
-    void openSubscriptionEditor(name, url);
+    void openSubscriptionEditor(name, url, type);
   }, [openSubscriptionEditor]);
 
-  const handleAddSubscription = useCallback(() => {
-    void openSubscriptionEditor();
+  const handleAddSubscription = useCallback((type: 'remote' | 'local' = 'remote') => {
+    void openSubscriptionEditor(undefined, undefined, type);
   }, [openSubscriptionEditor]);
 
   const handleUpdateCard = useCallback(async (e: React.MouseEvent, name: string, url?: string, hasRuntimeProvider?: boolean) => {
@@ -254,19 +255,30 @@ export function TabProxies({ status }: TabProxiesProps) {
           onUpdate={(e, providerName) => void handleUpdateCard(e, providerName, subscription?.url, hasRuntimeProvider)}
           onTest={handleTestProvider}
           onTestNode={handleTestGroup}
-          onEditSubscription={subscription ? ((e, providerName) => handleEditSubscription(e, providerName, subscription.url)) : undefined}
+          onEditSubscription={subscription ? ((e, providerName) => handleEditSubscription(e, providerName, subscription.url, subscription.type === 'local' ? 'local' : 'remote')) : undefined}
           onRemoveSubscription={subscription ? ((e, providerName) => void handleDeleteSubscription(e, providerName)) : undefined}
         />
       ))}
 
       {viewType === 'providers' && (isMihomo || isSingbox) && (
-        <button
-          onClick={handleAddSubscription}
-          className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-5 text-sm font-semibold text-sky-600 transition-colors hover:bg-sky-100 dark:border-sky-900/70 dark:bg-sky-950/20 dark:text-sky-300 dark:hover:bg-sky-950/30"
-        >
-          <Plus size={18} />
-          <span>新增订阅</span>
-        </button>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => handleAddSubscription('remote')}
+            className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-5 text-sm font-semibold text-sky-600 transition-colors hover:bg-sky-100 dark:border-sky-900/70 dark:bg-sky-950/20 dark:text-sky-300 dark:hover:bg-sky-950/30"
+          >
+            <Plus size={18} />
+            <span>新增远程订阅</span>
+          </button>
+          {isSingbox && (
+            <button
+              onClick={() => handleAddSubscription('local')}
+              className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-emerald-200 bg-emerald-50/70 px-5 py-5 text-sm font-semibold text-emerald-600 transition-colors hover:bg-emerald-100 dark:border-emerald-900/70 dark:bg-emerald-950/20 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+            >
+              <Plus size={18} />
+              <span>新增本地订阅</span>
+            </button>
+          )}
+        </div>
       )}
 
       {viewType === 'providers' && providerList.length === 0 && (
@@ -282,35 +294,58 @@ export function TabProxies({ status }: TabProxiesProps) {
           <div className="fixed left-1/2 top-1/2 z-50 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-white dark:bg-slate-900 p-6 shadow-xl animate-in zoom-in-95 duration-200">
             <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">{editor.originalName ? '编辑订阅' : '新增订阅'}</h3>
             <div className="space-y-4">
+              {isSingbox && (
+                <div>
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5 block">订阅类型</label>
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-100/80 p-1 dark:bg-slate-800/80">
+                    {(['remote', 'local'] as const).map(type => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setEditor({ ...editor, type })}
+                        className={cn(
+                          'rounded-xl px-3 py-2 text-sm font-semibold transition-colors',
+                          editor.type === type
+                            ? 'bg-white text-sky-600 shadow-sm dark:bg-slate-900 dark:text-sky-300'
+                            : 'text-slate-500 dark:text-slate-400'
+                        )}
+                      >
+                        {type === 'remote' ? '远程订阅' : '本地订阅'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5 block">订阅名称</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={editor.nextName}
                   onChange={(e) => setEditor({ ...editor, nextName: e.target.value })}
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:border-sky-500"
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5 block">订阅链接</label>
-                <textarea 
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5 block">{editor.type === 'local' ? '本地路径' : '订阅链接'}</label>
+                <textarea
                   value={editor.url}
                   onChange={(e) => setEditor({ ...editor, url: e.target.value })}
+                  placeholder={editor.type === 'local' ? '例如: /data/adb/box/sing-box/subscriptions/demo.txt' : ''}
                   className="w-full h-24 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:border-sky-500 resize-none break-all"
                 />
               </div>
             </div>
             <div className="mt-6 flex gap-3">
-              <button 
+              <button
                 onClick={() => setEditor(null)}
                 className="flex-1 py-2.5 rounded-xl font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               >
                 取消
               </button>
-              <button 
+              <button
                 onClick={async () => {
                   try {
-                    await handleSaveSubscription(editor.originalName, editor.nextName.trim(), editor.url.trim());
+                    await handleSaveSubscription(editor.originalName, editor.nextName.trim(), editor.url.trim(), editor.type);
                     setEditor(null);
                   } catch(e) {
                     notify(`订阅保存失败: ${e instanceof Error ? e.message : String(e)}`);

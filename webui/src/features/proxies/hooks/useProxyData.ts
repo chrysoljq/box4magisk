@@ -173,14 +173,14 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     }
   }, [client, isMounted, updatingProvider]);
 
-  const handleSaveSubscription = useCallback(async (currentName: string | null, nextName: string, url: string) => {
+  const handleSaveSubscription = useCallback(async (currentName: string | null, nextName: string, url: string, type: 'remote' | 'local' = 'remote') => {
     if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
       throw new Error('当前核心不支持该操作');
     }
 
     const action = status.bin_name === 'mihomo'
       ? (currentName ? boxBridge.updateMihomoSubscription(currentName, nextName, url) : boxBridge.addMihomoSubscription(nextName, url))
-      : (currentName ? boxBridge.updateSingboxSubscription(currentName, nextName, url) : boxBridge.addSingboxSubscription(nextName, url));
+      : (currentName ? boxBridge.updateSingboxSubscription(currentName, nextName, url, type) : boxBridge.addSingboxSubscription(nextName, url, type));
     const job = await action;
     const providerName = currentName || nextName;
     setUpdatingProvider(providerName);
