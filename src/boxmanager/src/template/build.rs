@@ -31,6 +31,7 @@ pub struct SingboxSubscriptionView {
     pub name: String,
     pub url: String,
     pub r#type: Option<String>,
+    pub update_time: Option<String>,
     pub cache_file: String,
     pub cache_exists: bool,
     pub cache_size: u64,
@@ -227,6 +228,7 @@ pub fn inspect_singbox_subscriptions(
             name: subscription.name,
             url: subscription.url,
             r#type: subscription.provider_type,
+            update_time: subscription.update_time,
             cache_file: cache_file.display().to_string(),
             cache_exists,
             cache_size,
@@ -311,21 +313,19 @@ fn expand_template_outbound(
         }
     };
 
-    // Apply filter and exclude_filter
-    let matched: Vec<Value> = candidate_tags
-        .into_iter()
-        .filter(|tag| filter.as_ref().is_none_or(|re| re.is_match(tag)))
-        .filter(|tag| exclude_filter.as_ref().is_none_or(|re| !re.is_match(tag)))
-        .map(|tag| Value::String(tag.to_string()))
-        .collect();
-
     // Get or create the outbounds array, then append matched tags
     let outbounds_arr = obj
         .entry("outbounds")
         .or_insert_with(|| Value::Array(Vec::new()));
 
     if let Some(arr) = outbounds_arr.as_array_mut() {
-        arr.extend(matched);
+        arr.extend(
+            candidate_tags
+                .into_iter()
+                .filter(|tag| filter.as_ref().is_none_or(|re| re.is_match(tag)))
+                .filter(|tag| exclude_filter.as_ref().is_none_or(|re| !re.is_match(tag)))
+                .map(|tag| Value::String(tag.to_string())),
+        );
 
         // If still empty after expansion, fall back to "direct"
         if arr.is_empty() {
@@ -362,10 +362,9 @@ fn compile_optional_regex(
 fn subscription_cache_file(subscriptions_dir: &Path, name: &str) -> PathBuf {
     let mut encoded = String::new();
     let mut last_was_underscore = false;
-    for ch in name.chars() {
-        let allowed = matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '_' | '-');
-        if allowed {
-            encoded.push(ch);
+    for byte in name.bytes() {
+        if is_allowed_cache_filename_byte(byte) {
+            encoded.push(char::from(byte));
             last_was_underscore = false;
             continue;
         }
@@ -378,6 +377,10 @@ fn subscription_cache_file(subscriptions_dir: &Path, name: &str) -> PathBuf {
         encoded.push('_');
     }
     subscriptions_dir.join(format!("{encoded}.txt"))
+}
+
+fn is_allowed_cache_filename_byte(byte: u8) -> bool {
+    matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-')
 }
 
 fn is_subscription_metadata_tag(name: &str) -> bool {
