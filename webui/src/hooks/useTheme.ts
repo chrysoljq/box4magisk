@@ -10,16 +10,27 @@ function readStoredTheme(): ThemeMode {
   return value === 'light' || value === 'dark' || value === 'system' ? value : 'system';
 }
 
+function readSystemIsDark() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
 export function useTheme() {
   const [theme, setTheme] = useState<ThemeMode>(readStoredTheme);
-  const [systemIsDark, setSystemIsDark] = useState(false);
+  const [systemIsDark, setSystemIsDark] = useState(readSystemIsDark);
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     setSystemIsDark(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setSystemIsDark(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setSystemIsDark(e.matches);
+
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    }
+
+    mq.addListener(handler);
+    return () => mq.removeListener(handler);
   }, []);
 
   useEffect(() => {
