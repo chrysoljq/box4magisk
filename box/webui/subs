@@ -30,6 +30,10 @@ ensure_singbox_subscription_store() {
     mkdir -p "$SINGBOX_SUBSCRIPTIONS_DIR" || return 1
 }
 
+current_iso_utc_time() {
+    date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
 singbox_subscription_cache_file() {
     local name="$1"
     local encoded
@@ -137,6 +141,7 @@ save_singbox_subscription_entry() {
     local subscription_type="${4:-remote}"
     local old_cache_file=""
     local cache_file=""
+    local update_time=""
 
     validate_subscription_name "$next_name" "singbox-subscriptions"
     case "$subscription_type" in
@@ -147,16 +152,26 @@ save_singbox_subscription_entry() {
     if [ "$subscription_type" = "remote" ]; then
         cache_file="$(download_singbox_subscription_cache "$next_name" "$url")" \
             || emit_error "failed to download subscription: $url" "singbox-subscriptions"
+        update_time="$(current_iso_utc_time)"
     elif [ "$current_name" != "$next_name" ]; then
         old_cache_file="$(singbox_subscription_cache_file "$current_name")"
         rm -f "$old_cache_file"
     fi
 
-    run_singbox_subscription_tool set-singbox-subscription \
-        --current-name "$current_name" \
-        --name "$next_name" \
-        --url "$url" \
-        --provider-type "$subscription_type" >/dev/null
+    if [ -n "$update_time" ]; then
+        run_singbox_subscription_tool set-singbox-subscription \
+            --current-name "$current_name" \
+            --name "$next_name" \
+            --url "$url" \
+            --provider-type "$subscription_type" \
+            --update-time "$update_time" >/dev/null
+    else
+        run_singbox_subscription_tool set-singbox-subscription \
+            --current-name "$current_name" \
+            --name "$next_name" \
+            --url "$url" \
+            --provider-type "$subscription_type" >/dev/null
+    fi
     build_singbox_runtime_config >/dev/null
 
     printf '%s' "$cache_file"

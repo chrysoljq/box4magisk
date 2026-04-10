@@ -40,6 +40,7 @@ pub(super) fn upsert_entry(
     next_name: &str,
     url: &str,
     provider_type: &str,
+    update_time: Option<String>,
 ) {
     let mut updated = false;
     let mut next_entries = Vec::with_capacity(entries.len() + 1);
@@ -51,7 +52,7 @@ pub(super) fn upsert_entry(
                     name: next_name.to_string(),
                     url: url.to_string(),
                     provider_type: Some(provider_type.to_string()),
-                    update_time: entry.update_time.clone(),
+                    update_time: update_time.clone().or_else(|| entry.update_time.clone()),
                 });
                 updated = true;
             }
@@ -68,7 +69,7 @@ pub(super) fn upsert_entry(
             name: next_name.to_string(),
             url: url.to_string(),
             provider_type: Some(provider_type.to_string()),
-            update_time: None,
+            update_time,
         });
     }
 

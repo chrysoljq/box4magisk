@@ -108,6 +108,9 @@ struct SetSingboxSubscriptionCli {
 
     #[arg(long, default_value = "remote")]
     provider_type: String,
+
+    #[arg(long)]
+    update_time: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -235,6 +238,7 @@ pub fn run() -> Result<()> {
             &cli.name,
             &cli.url,
             &cli.provider_type,
+            cli.update_time,
         )?;
         println!(
             "{}",

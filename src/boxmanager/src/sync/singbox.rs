@@ -26,7 +26,7 @@ pub fn sync_singbox_subscriptions(template_path: &Path, state_path: &Path) -> Re
         };
         validate_provider_name(name)?;
         validate_provider_url(url)?;
-        upsert_entry(&mut entries, name, name, url, "remote");
+        upsert_entry(&mut entries, name, name, url, "remote", None);
     }
 
     write_singbox_providers(template_path, &entries)
@@ -43,6 +43,7 @@ pub fn upsert_singbox_subscription(
     next_name: &str,
     url: &str,
     provider_type: &str,
+    update_time: Option<String>,
 ) -> Result<()> {
     validate_provider_name(next_name)?;
     validate_provider_url(url)?;
@@ -58,6 +59,7 @@ pub fn upsert_singbox_subscription(
         next_name,
         url,
         provider_type,
+        update_time,
     );
     write_singbox_providers(template_path, &entries)
 }

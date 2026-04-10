@@ -88,18 +88,24 @@ export function TabProxies({ status }: TabProxiesProps) {
 
     return names.map(name => {
       const runtimeProvider = runtimeMap.get(name);
+      const subscription = subscriptionMap.get(name);
       return {
         name,
-        provider: runtimeProvider || {
-          name,
-          type: 'Subscription',
-          vehicleType: isSingbox
-            ? (subscriptionMap.get(name)?.status === 'ok' ? 'Subscription' : 'Needs Attention')
-            : 'Configured',
-          updatedAt: '',
-          proxies: subscriptionMap.get(name)?.nodes || [],
-        },
-        subscription: subscriptionMap.get(name),
+        provider: runtimeProvider
+          ? {
+            ...runtimeProvider,
+            updatedAt: runtimeProvider.updatedAt || subscription?.update_time || '',
+          }
+          : {
+            name,
+            type: 'Subscription',
+            vehicleType: isSingbox
+              ? (subscription?.status === 'ok' ? 'Subscription' : 'Needs Attention')
+              : 'Configured',
+            updatedAt: subscription?.update_time || '',
+            proxies: subscription?.nodes || [],
+          },
+        subscription,
         hasRuntimeProvider: Boolean(runtimeProvider),
       };
     });
