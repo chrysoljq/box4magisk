@@ -118,6 +118,18 @@ list_singbox_subscriptions_json() {
     printf '%s' "$entries"
 }
 
+save_mihomo_subscription_entry() {
+    local current_name="$1"
+    local next_name="$2"
+    local url="$3"
+
+    migrate_legacy_mihomo_subscriptions || emit_error "failed to migrate mihomo subscriptions" "mihomo-subscriptions"
+    run_mihomo_provider_tool set-mihomo-provider \
+        --current-name "$current_name" \
+        --name "$next_name" \
+        --url "$url" >/dev/null
+}
+
 save_singbox_subscription_entry() {
     local current_name="$1"
     local next_name="$2"
