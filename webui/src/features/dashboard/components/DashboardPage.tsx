@@ -3,7 +3,6 @@ import { RefreshCw, Square, Play, Smartphone, Wifi, Radio, Usb, MemoryStick } fr
 import { SectionTitle, SwitchRow, SelectRow } from '@/components/ui';
 import { ClashClient, type ClashMemory } from '@/lib/clash';
 import { useProxyData } from '@/features/proxies/hooks/useProxyData';
-import { MODE_OPTIONS } from '@/features/proxies/types';
 import type { BoxConfig, BoxStatus } from '@/types/box';
 
 const PROXY_MODE_OPTIONS = [
@@ -13,6 +12,13 @@ const PROXY_MODE_OPTIONS = [
 ];
 
 const BIN_NAME_OPTIONS = ['sing-box', 'clash', 'mihomo', 'xray', 'v2ray', 'hysteria'];
+
+const MODE_LABEL_MAP: Record<string, string> = {
+  direct: '直连',
+  rule: '规则',
+  global: '全局',
+  script: '脚本',
+};
 
 const formatProxyMode = (value: unknown) => {
   switch (String(value ?? '0')) {
@@ -52,7 +58,7 @@ interface DashboardPageProps {
 }
 
 export function DashboardPage({ status, config, handleServiceAction, actionLoading, handleChange, handleToggle, handleToggleAutoStart }: DashboardPageProps) {
-  const { currentMode, handleChangeMode } = useProxyData(status);
+  const { currentMode, availableModes, handleChangeMode } = useProxyData(status, config);
   const [memory, setMemory] = useState<ClashMemory | null>(null);
 
   const client = useMemo(() => {
@@ -107,6 +113,13 @@ export function DashboardPage({ status, config, handleServiceAction, actionLoadi
     };
   }, [status?.running, pollMemoryOnce]);
 
+  const modeOptions = useMemo(() => {
+    return availableModes.map(mode => ({
+      v: mode,
+      l: MODE_LABEL_MAP[mode.toLowerCase()] || mode,
+    }));
+  }, [availableModes]);
+
   return (
     <div className="px-4 space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-200">
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-800 mt-2 transition-colors">
@@ -160,9 +173,9 @@ export function DashboardPage({ status, config, handleServiceAction, actionLoadi
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-2 shadow-sm border border-slate-100 dark:border-slate-800 transition-colors">
           <SelectRow
             label="切换出站模式"
-            value={currentMode.toLowerCase()}
-            options={MODE_OPTIONS.map(m => ({ l: m.label, v: m.id }))}
-            onChange={(value: string) => handleChangeMode(value as any)}
+            value={currentMode}
+            options={modeOptions}
+            onChange={handleChangeMode}
             border={true}
           />
           <SelectRow label="切换代理模式" value={String(config?.PROXY_MODE ?? 0)} options={PROXY_MODE_OPTIONS} onChange={(value: string) => handleChange('PROXY_MODE', parseInt(value, 10))} border={true} />

@@ -1,5 +1,6 @@
 export interface ClashConfig {
-  mode: 'rule' | 'global' | 'direct';
+  mode: string;
+  'mode-list'?: string[];
 }
 
 export interface Proxy {

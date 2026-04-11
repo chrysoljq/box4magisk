@@ -14,10 +14,9 @@ record_download_result() {
 github_latest_asset_url() {
     local repo="$1"
     local pattern="$2"
-    local response url
+    local url
 
-    response="$(fetch_url "https://api.github.com/repos/${repo}/releases/latest")" || return 1
-    url="$(printf '%s\n' "$response" \
+    url="$(fetch_url "https://api.github.com/repos/${repo}/releases/latest" \
         | grep -o '"browser_download_url":[[:space:]]*"[^"]*"' \
         | sed 's/.*"browser_download_url":[[:space:]]*"\([^"]*\)"/\1/' \
         | grep -E "$pattern" \
@@ -55,10 +54,40 @@ detect_download_arch() {
 install_file() {
     local source_file="$1"
     local target_file="$2"
+    local target_dir temp_file
 
-    mkdir -p "$(dirname "$target_file")" || return 1
-    cp "$source_file" "$target_file" || return 1
-    chmod 700 "$target_file" || return 1
+    target_dir="$(dirname "$target_file")"
+    mkdir -p "$target_dir" || return 1
+    temp_file="${target_file}.tmp.$$"
+
+    rm -f "$temp_file" || return 1
+    cp "$source_file" "$temp_file" || return 1
+    chmod 700 "$temp_file" || return 1
+    mv -f "$temp_file" "$target_file" || {
+        rm -f "$temp_file"
+        return 1
+    }
+}
+
+current_core_needs_restart() {
+    local core="$1"
+
+    [ "$bin_name" = "$core" ] || return 1
+    pidof "$core" >/dev/null 2>&1
+}
+
+record_core_download_status() {
+    local result_file="$1"
+    local core="$2"
+    local status="$3"
+    local asset="$4"
+    local message="$5"
+
+    if [ "$status" = "ok" ] && current_core_needs_restart "$core"; then
+        message="installed; restart required"
+    fi
+
+    record_download_result "$result_file" "$core" "$status" "$asset" "$message"
 }
 
 download_sing_box_core() {
@@ -144,7 +173,7 @@ cmd_sync_download_cores() {
     trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
     if asset="$(download_sing_box_core "$tmp_dir" "$sing_box_arch" "${box_path}/bin/sing-box" 2>/dev/null)"; then
-        record_download_result "$result_file" "sing-box" "ok" "$asset" "installed"
+        record_core_download_status "$result_file" "sing-box" "ok" "$asset" "installed"
         ok_count=$((ok_count + 1))
     else
         record_download_result "$result_file" "sing-box" "error" "" "download failed"
@@ -152,7 +181,7 @@ cmd_sync_download_cores() {
     fi
 
     if asset="$(download_mihomo_core "$tmp_dir" "$mihomo_arch" "${box_path}/bin/mihomo" 2>/dev/null)"; then
-        record_download_result "$result_file" "mihomo" "ok" "$asset" "installed"
+        record_core_download_status "$result_file" "mihomo" "ok" "$asset" "installed"
         ok_count=$((ok_count + 1))
     else
         record_download_result "$result_file" "mihomo" "error" "" "download failed"
@@ -160,7 +189,7 @@ cmd_sync_download_cores() {
     fi
 
     if asset="$(download_xray_core "$tmp_dir" "$xray_arch" "${box_path}/bin/xray" "${box_path}/xray" 2>/dev/null)"; then
-        record_download_result "$result_file" "xray" "ok" "$asset" "installed"
+        record_core_download_status "$result_file" "xray" "ok" "$asset" "installed"
         ok_count=$((ok_count + 1))
     else
         record_download_result "$result_file" "xray" "error" "" "download failed"

@@ -2,7 +2,7 @@ import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ClashClient } from '@/lib/clash';
 import { boxBridge, notify, waitForJob } from '@/lib/bridge';
-import type { BoxSubscription } from '@/types/box';
+import type { BoxConfig, BoxSubscription } from '@/types/box';
 import type { ProviderMap, ProxyMap } from '../types';
 
 function useIsMounted() {
@@ -20,18 +20,59 @@ function getSubscriptionQueuedText(currentName: string | null) {
   return currentName ? '订阅更新任务' : '订阅新增任务';
 }
 
-export function useProxyData(status: { running: boolean; bin_name?: string; clash_api_port: string; clash_api_secret: string }) {
+function normalizeMode(mode: string | null | undefined) {
+  return String(mode || '').trim();
+}
+
+function normalizeModeKey(mode: string | null | undefined) {
+  return normalizeMode(mode).toLowerCase();
+}
+
+function getFallbackModes(binName?: string) {
+  if (binName === 'sing-box') {
+    return [];
+  }
+  return ['direct', 'rule', 'global'];
+}
+
+function buildAvailableModes(binName: string | undefined, currentMode: string, apiModeList?: string[]) {
+  const modeMap = new Map<string, string>();
+  const addMode = (mode: string | null | undefined) => {
+    const normalized = normalizeMode(mode);
+    const key = normalizeModeKey(normalized);
+    if (!normalized || !key || modeMap.has(key)) return;
+    modeMap.set(key, normalized);
+  };
+
+  apiModeList?.forEach(addMode);
+  getFallbackModes(binName).forEach(addMode);
+
+  addMode(currentMode);
+
+  return Array.from(modeMap.values());
+}
+
+export function useProxyData(
+  status: { running: boolean; bin_name?: string; clash_api_port: string; clash_api_secret: string },
+  config?: BoxConfig
+) {
+  void config;
   const isMounted = useIsMounted();
+  const lastFetchControllerRef = useRef<AbortController | null>(null);
+  const fetchSequenceRef = useRef(0);
   const [proxies, setProxies] = useState<ProxyMap | null>(null);
   const [providers, setProviders] = useState<ProviderMap | null>(null);
   const [subscriptions, setSubscriptions] = useState<BoxSubscription[]>([]);
   const [latencies, setLatencies] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [apiError, setApiError] = useState(false);
+  const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [currentMode, setCurrentMode] = useState<string>('rule');
+  const [availableModes, setAvailableModes] = useState<string[]>(getFallbackModes(status.bin_name));
   const [testingOwners, setTestingOwners] = useState<Record<string, number>>({});
   const [testingNodes, setTestingNodes] = useState<Record<string, number>>({});
-  const [updatingProvider, setUpdatingProvider] = useState<string | null>(null);
+  const [updatingProviders, setUpdatingProviders] = useState<Record<string, number>>({});
 
   const client = useMemo(() => new ClashClient(status.clash_api_port, status.clash_api_secret), [status.clash_api_port, status.clash_api_secret]);
 
@@ -52,7 +93,8 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     setTestingOwners(prev => {
       const current = prev[ownerKey] || 0;
       if (current <= 1) {
-        const { [ownerKey]: _, ...rest } = prev;
+        const rest = { ...prev };
+        delete rest[ownerKey];
         return rest;
       }
       return { ...prev, [ownerKey]: current - 1 };
@@ -71,6 +113,22 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     });
   }, []);
 
+  const markProviderUpdateStart = useCallback((name: string) => {
+    setUpdatingProviders(prev => ({ ...prev, [name]: (prev[name] || 0) + 1 }));
+  }, []);
+
+  const markProviderUpdateEnd = useCallback((name: string) => {
+    setUpdatingProviders(prev => {
+      const current = prev[name] || 0;
+      if (current <= 1) {
+        const rest = { ...prev };
+        delete rest[name];
+        return rest;
+      }
+      return { ...prev, [name]: current - 1 };
+    });
+  }, []);
+
   const refreshManagedSubscriptions = useCallback(async (signal?: AbortSignal) => {
     if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
       if (isMounted.current) setSubscriptions([]);
@@ -85,23 +143,52 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     return data;
   }, [isMounted, status.bin_name]);
 
-  const fetchInitialData = useCallback(async (signal?: AbortSignal) => {
+  const fetchInitialData = useCallback(async (
+    signalOrOptions?: AbortSignal | { signal?: AbortSignal; silent?: boolean },
+    maybeOptions?: { silent?: boolean }
+  ) => {
     if (!status.running) return;
-    setLoading(true);
-    setApiError(false);
-    try {
-      const [proxyData, providerData, config] = await Promise.all([
-        client.getProxies({ signal }),
-        client.getProviders({ signal }),
-        client.getConfig({ signal }),
-      ]);
-      await refreshManagedSubscriptions(signal);
 
-      if (!proxyData || signal?.aborted || !isMounted.current) return;
+    const externalSignal = signalOrOptions instanceof AbortSignal
+      ? signalOrOptions
+      : signalOrOptions?.signal;
+    const silent = signalOrOptions instanceof AbortSignal
+      ? Boolean(maybeOptions?.silent)
+      : Boolean(signalOrOptions?.silent);
+
+    lastFetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    lastFetchControllerRef.current = controller;
+    const activeSignal = controller.signal;
+    const requestId = ++fetchSequenceRef.current;
+
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort(externalSignal.reason);
+      } else {
+        externalSignal.addEventListener('abort', () => controller.abort(externalSignal.reason), { once: true });
+      }
+    }
+
+    if (silent) setRefreshing(true);
+    else setLoading(true);
+    setApiError(false);
+    setApiErrorMessage(null);
+
+    try {
+      const [proxyData, providerData, clashConfig] = await Promise.all([
+        client.getProxies({ signal: activeSignal }),
+        client.getProviders({ signal: activeSignal }),
+        client.getConfig({ signal: activeSignal }),
+      ]);
+      await refreshManagedSubscriptions(activeSignal);
+
+      if (!proxyData || activeSignal.aborted || !isMounted.current || requestId !== fetchSequenceRef.current) return;
 
       setProxies(proxyData);
       setProviders(providerData);
-      setCurrentMode(config.mode);
+      setCurrentMode(clashConfig.mode);
+      setAvailableModes(buildAvailableModes(status.bin_name, clashConfig.mode, clashConfig['mode-list']));
 
       const initialLatencies: Record<string, number> = {};
       Object.keys(proxyData).forEach(name => {
@@ -112,21 +199,39 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
       });
       setLatencies(initialLatencies);
     } catch (e) {
-      if (signal?.aborted || !isMounted.current) return;
+      if (activeSignal.aborted || !isMounted.current || requestId !== fetchSequenceRef.current) return;
       console.error('Fetch Data Error:', e);
       setApiError(true);
+      setApiErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
-      if (!signal?.aborted && isMounted.current) {
-        setLoading(false);
+      if (lastFetchControllerRef.current === controller) {
+        lastFetchControllerRef.current = null;
+      }
+      if (!activeSignal.aborted && isMounted.current && requestId === fetchSequenceRef.current) {
+        if (silent) setRefreshing(false);
+        else setLoading(false);
       }
     }
-  }, [client, isMounted, refreshManagedSubscriptions, status.running]);
+  }, [client, isMounted, refreshManagedSubscriptions, status.bin_name, status.running]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetchInitialData(controller.signal);
-    return () => controller.abort();
+    void fetchInitialData({ signal: controller.signal });
+    return () => {
+      controller.abort();
+      lastFetchControllerRef.current?.abort();
+    };
   }, [fetchInitialData]);
+
+  useEffect(() => {
+    setAvailableModes(prev => {
+      const next = buildAvailableModes(status.bin_name, currentMode, prev);
+      if (next.length === prev.length && next.every((mode, index) => mode === prev[index])) {
+        return prev;
+      }
+      return next;
+    });
+  }, [currentMode, status.bin_name]);
 
   const handleSelectNode = useCallback(async (groupName: string, nodeName: string) => {
     if (proxies?.[groupName]?.now === nodeName) return;
@@ -142,8 +247,7 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     }
   }, [client, isMounted, proxies]);
   
-  // SHOULD_FIX: 这里应该通过clash api查看有哪些模式
-  const handleChangeMode = useCallback(async (mode: 'rule' | 'global' | 'direct') => {
+  const handleChangeMode = useCallback(async (mode: string) => {
     if (currentMode === mode) return;
     const oldMode = currentMode;
     setCurrentMode(mode);
@@ -159,8 +263,8 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
 
   const handleUpdateProvider = useCallback(async (e: React.MouseEvent, name: string) => {
     e.stopPropagation();
-    if (updatingProvider) return;
-    setUpdatingProvider(name);
+    if (updatingProviders[name]) return;
+    markProviderUpdateStart(name);
     try {
       await client.updateProvider(name);
       const providerData = await client.getProviders();
@@ -170,9 +274,9 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     } catch (e: unknown) {
       if (isMounted.current) notify(`更新失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      if (isMounted.current) setUpdatingProvider(null);
+      if (isMounted.current) markProviderUpdateEnd(name);
     }
-  }, [client, isMounted, updatingProvider]);
+  }, [client, isMounted, markProviderUpdateEnd, markProviderUpdateStart, updatingProviders]);
 
   const handleSaveSubscription = useCallback(async (currentName: string | null, nextName: string, url: string, type: 'remote' | 'local' = 'remote') => {
     if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
@@ -184,15 +288,14 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
       : (currentName ? boxBridge.updateSingboxSubscription(currentName, nextName, url, type) : boxBridge.addSingboxSubscription(nextName, url, type));
     const job = await action;
     const providerName = currentName || nextName;
-    setUpdatingProvider(providerName);
+    markProviderUpdateStart(providerName);
     notify(`${getSubscriptionQueuedText(currentName)}已转入后台`);
     void waitForJob(job.job_id)
       .then(async () => {
-        await refreshManagedSubscriptions();
         try {
-          await fetchInitialData();
+          await fetchInitialData({ silent: true });
         } catch {
-          // Runtime provider refresh is best-effort; config state is the source of truth.
+          await refreshManagedSubscriptions();
         }
         if (isMounted.current) {
           notify(currentName ? '订阅已更新' : '订阅已新增');
@@ -202,10 +305,10 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
         if (isMounted.current) notify(`订阅保存失败: ${error instanceof Error ? error.message : String(error)}`);
       })
       .finally(() => {
-        if (isMounted.current) setUpdatingProvider(prev => (prev === providerName ? null : prev));
+        if (isMounted.current) markProviderUpdateEnd(providerName);
       });
     return job;
-  }, [fetchInitialData, isMounted, refreshManagedSubscriptions, status.bin_name]);
+  }, [fetchInitialData, isMounted, markProviderUpdateEnd, markProviderUpdateStart, refreshManagedSubscriptions, status.bin_name]);
 
   const handleRemoveSubscription = useCallback(async (name: string) => {
     if (status.bin_name !== 'mihomo' && status.bin_name !== 'sing-box') {
@@ -215,29 +318,27 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     await (status.bin_name === 'mihomo'
       ? boxBridge.removeMihomoSubscription(name)
       : boxBridge.removeSingboxSubscription(name));
-    await refreshManagedSubscriptions();
     try {
-      await fetchInitialData();
+      await fetchInitialData({ silent: true });
     } catch {
-      // Runtime provider refresh is best-effort; config state is the source of truth.
+      await refreshManagedSubscriptions();
     }
-  }, [fetchInitialData, isMounted, refreshManagedSubscriptions, status.bin_name]);
+  }, [fetchInitialData, refreshManagedSubscriptions, status.bin_name]);
 
   const handleRefreshSubscription = useCallback(async (name: string, url: string) => {
     if (status.bin_name !== 'sing-box') {
       throw new Error('当前核心不支持刷新订阅缓存');
     }
 
-    setUpdatingProvider(name);
+    markProviderUpdateStart(name);
     const job = await boxBridge.updateSingboxSubscription(name, name, url);
     notify('订阅刷新已转入后台');
     void waitForJob(job.job_id)
       .then(async () => {
-        await refreshManagedSubscriptions();
         try {
-          await fetchInitialData();
+          await fetchInitialData({ silent: true });
         } catch {
-          // Runtime refresh is best-effort.
+          await refreshManagedSubscriptions();
         }
         if (isMounted.current) notify('订阅缓存已刷新');
       })
@@ -245,10 +346,10 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
         if (isMounted.current) notify(`刷新失败: ${error instanceof Error ? error.message : String(error)}`);
       })
       .finally(() => {
-        if (isMounted.current) setUpdatingProvider(prev => (prev === name ? null : prev));
+        if (isMounted.current) markProviderUpdateEnd(name);
       });
     return job;
-  }, [fetchInitialData, refreshManagedSubscriptions, status.bin_name]);
+  }, [fetchInitialData, isMounted, markProviderUpdateEnd, markProviderUpdateStart, refreshManagedSubscriptions, status.bin_name]);
 
   const handleTestProvider = useCallback(async (e: React.MouseEvent, name: string) => {
     e.stopPropagation();
@@ -309,11 +410,14 @@ export function useProxyData(status: { running: boolean; bin_name?: string; clas
     subscriptions,
     latencies,
     loading,
+    refreshing,
     apiError,
+    apiErrorMessage,
     currentMode,
+    availableModes,
     testingOwners,
     testingNodes,
-    updatingProvider,
+    updatingProviders,
     fetchInitialData,
     handleSelectNode,
     handleChangeMode,

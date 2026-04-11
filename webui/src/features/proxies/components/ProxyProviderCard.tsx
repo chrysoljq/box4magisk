@@ -177,7 +177,7 @@ export const ProxyProviderCard = React.memo((props: ProxyProviderCardProps) => {
           {provider.proxies.map((node, index) => {
             const ms = latencies[node.name] || 0;
             const style = getLatencyStyle(ms);
-            const isNodeTesting = Boolean(testingNodes[node.name]) && ms === 0;
+            const isNodeTesting = Boolean(testingNodes[node.name]);
             return (
               <div key={index} className="flex flex-col px-3 py-2 rounded-2xl bg-slate-50/50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60 transition-all hover:border-indigo-200 dark:hover:border-indigo-800/50 opacity-90">
                 <div className="flex items-center space-x-1.5 mb-1.5">
@@ -194,7 +194,7 @@ export const ProxyProviderCard = React.memo((props: ProxyProviderCardProps) => {
                     onClick={e => onTestNode(e, name, [node.name])}
                     title="点击测速"
                   >
-                    {ms ? `${ms} ms` : (isNodeTesting ? '...' : '-')}
+                    {isNodeTesting ? '...' : (ms ? `${ms} ms` : '-')}
                   </div>
                 </div>
               </div>

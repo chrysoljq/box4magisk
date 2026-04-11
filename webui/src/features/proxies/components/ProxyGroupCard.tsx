@@ -22,7 +22,7 @@ interface ProxyGroupCardProps {
 
 export const ProxyGroupCard = React.memo((props: ProxyGroupCardProps) => {
   const { groupName, group, proxies, latencies, testingOwners, testingNodes, isExpanded, sortType, onToggleExpand, onToggleSort, onTestGroup, onSelectNode } = props;
-  const isSelector = group.type === 'Selector';
+  const isSwitchableGroup = ['Selector'].includes(group.type); // TODO: 需要斟酌
   const isTesting = Boolean(testingOwners[`group:${groupName}`]);
   const nowMs = latencies[group.now || ''] || 0;
   const nowStyle = getLatencyStyle(nowMs);
@@ -117,19 +117,20 @@ export const ProxyGroupCard = React.memo((props: ProxyGroupCardProps) => {
             const style = getLatencyStyle(ms);
             const nodeType = node.detail?.type || 'Unknown';
             const isMissingDetail = !node.detail;
+            const isNodeTesting = Boolean(testingNodes[node.name]);
 
             return (
               <button
                 key={node.key}
-                disabled={!isSelector}
+                disabled={!isSwitchableGroup}
                 onClick={() => onSelectNode(groupName, node.name)}
                 className={cn(
                   'relative flex flex-col px-3 py-2 rounded-2xl text-left transition-all border outline-none',
                   isSelected
                     ? 'bg-indigo-50/80 dark:bg-indigo-500/10 border-indigo-500/60 dark:border-indigo-500/50 shadow-sm opacity-100 ring-1 ring-indigo-500/20'
                     : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800/60 hover:border-indigo-200 dark:hover:border-indigo-800/50 opacity-90',
-                  !isSelector && 'cursor-default opacity-80',
-                  isSelector && 'active:scale-[0.97]',
+                  !isSwitchableGroup && 'cursor-default opacity-80',
+                  isSwitchableGroup && 'active:scale-[0.97]',
                 )}
               >
                 <div className="flex items-center space-x-1.5 mb-1.5 w-full">
@@ -148,7 +149,7 @@ export const ProxyGroupCard = React.memo((props: ProxyGroupCardProps) => {
                     onClick={e => onTestGroup(e, groupName, [node.name])}
                     title="点击测速"
                   >
-                    {ms ? `${ms} ms` : (testingNodes[node.name] ? '...' : '-')}
+                    {isNodeTesting ? '...' : (ms ? `${ms} ms` : '-')}
                   </div>
                 </div>
               </button>

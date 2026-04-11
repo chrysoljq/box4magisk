@@ -29,9 +29,10 @@ export function TabProxies({ status }: TabProxiesProps) {
     latencies,
     loading,
     apiError,
+    apiErrorMessage,
     testingOwners,
     testingNodes,
-    updatingProvider,
+    updatingProviders,
     fetchInitialData,
     handleSelectNode,
     handleUpdateProvider,
@@ -185,7 +186,7 @@ export function TabProxies({ status }: TabProxiesProps) {
         </div>
         <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-2">后端 API 连接失败</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 mb-8 leading-relaxed">
-          无法连接到核心代理面板接口。<br />请检查代理核心是否已成功启动。
+          {apiErrorMessage || '无法连接到核心代理面板接口。'}<br />请检查代理核心是否已成功启动。
         </p>
         <button
           onClick={() => { void fetchInitialData(); }}
@@ -209,7 +210,6 @@ export function TabProxies({ status }: TabProxiesProps) {
 
   return (
     <div className="px-4 pb-6 pt-2 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-
       <div className="flex bg-slate-200/60 dark:bg-slate-800/60 p-1 rounded-2xl mb-4">
         <button
           onClick={() => setViewType('proxies')}
@@ -267,7 +267,7 @@ export function TabProxies({ status }: TabProxiesProps) {
           testingOwners={testingOwners}
           testingNodes={testingNodes}
           isExpanded={expandedProviders[name]}
-          isUpdating={updatingProvider === name}
+          isUpdating={Boolean(updatingProviders[name])}
           canManageSubscription={isMihomo || isSingbox}
           hasRuntimeProvider={hasRuntimeProvider}
           canRefreshProvider={hasRuntimeProvider || (isSingbox ? subscription?.type === 'remote' : Boolean(subscription?.url))}
