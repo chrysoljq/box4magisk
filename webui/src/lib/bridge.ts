@@ -96,7 +96,7 @@ export const boxBridge = {
   updateSingboxSubscription: (currentName: string, nextName: string, url: string, type: 'remote' | 'local' = 'remote') =>
     runApi<BoxAsyncJob>(["singbox-subscription-update", currentName, nextName, url, type]),
   removeSingboxSubscription: (name: string) => runApi(["singbox-subscription-remove", name]),
-  downloadCores: () => runApi<BoxAsyncJob>(["download-cores"]),
+  downloadCores: (core?: string) => runApi<BoxAsyncJob>(core ? ["download-cores", core] : ["download-cores"]),
   jobStatus: (jobId: string) => runApi<BoxAsyncJobStatus>(["job-status", jobId]),
 };
 

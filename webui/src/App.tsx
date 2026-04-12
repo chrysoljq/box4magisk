@@ -39,6 +39,7 @@ export default function App() {
 
   const activeCore = config.bin_name || 'sing-box';
   const isCoreSupported = activeCore === 'mihomo' || activeCore === 'sing-box';
+  const isDownloadableCore = activeCore === 'sing-box' || activeCore === 'mihomo' || activeCore === 'xray';
 
   const handleImportSub = () => {
     setMenuOpen(false);
@@ -67,7 +68,11 @@ export default function App() {
 
   const handleDownloadCore = () => {
     setMenuOpen(false);
-    void boxBridge.downloadCores()
+    if (!isDownloadableCore) {
+      notify(`当前核心暂不支持在线下载: ${activeCore}`);
+      return;
+    }
+    void boxBridge.downloadCores(activeCore)
       .then(async job => {
         notify('核心下载已转入后台');
         await waitForJob(job.job_id, { timeoutMs: 300000 });
@@ -142,8 +147,8 @@ export default function App() {
                   </button>
                   <button
                     onClick={handleDownloadCore}
-                    disabled={actionLoading !== null}
-                    className="w-full flex items-center px-4 py-3 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors border-t border-slate-100 dark:border-slate-800/50"
+                    disabled={!isDownloadableCore || actionLoading !== null}
+                    className={`w-full flex items-center px-4 py-3 text-sm text-left transition-colors border-t border-slate-100 dark:border-slate-800/50 ${isDownloadableCore ? 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800' : 'text-slate-400 dark:text-slate-600 opacity-60 cursor-not-allowed'}`}
                   >
                     <Download size={16} className="mr-2" />
                     下载核心 ({activeCore})

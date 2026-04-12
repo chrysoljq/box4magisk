@@ -120,19 +120,20 @@ export const ProxyGroupCard = React.memo((props: ProxyGroupCardProps) => {
             const isNodeTesting = Boolean(testingNodes[node.name]);
 
             return (
-              <button
+              <div
                 key={node.key}
-                disabled={!isSwitchableGroup}
-                onClick={() => onSelectNode(groupName, node.name)}
+                onClick={() => isSwitchableGroup && onSelectNode(groupName, node.name)}
                 className={cn(
                   'relative flex flex-col px-3 py-2 rounded-2xl text-left transition-all border outline-none',
+                  isSwitchableGroup ? 'cursor-pointer' : 'cursor-default',
                   isSelected
                     ? 'bg-indigo-50/80 dark:bg-indigo-500/10 border-indigo-500/60 dark:border-indigo-500/50 shadow-sm opacity-100 ring-1 ring-indigo-500/20'
                     : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800/60 hover:border-indigo-200 dark:hover:border-indigo-800/50 opacity-90',
-                  !isSwitchableGroup && 'cursor-default opacity-80',
+                  !isSwitchableGroup && 'opacity-90', 
                   isSwitchableGroup && 'active:scale-[0.97]',
                 )}
               >
+                {/* 上半部分：节点名称 */}
                 <div className="flex items-center space-x-1.5 mb-1.5 w-full">
                   <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', style.bg)} />
                   <div className={cn('text-[12px] font-semibold truncate flex-1 leading-tight', isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300')}>
@@ -140,19 +141,29 @@ export const ProxyGroupCard = React.memo((props: ProxyGroupCardProps) => {
                   </div>
                   {isSelected && <Check size={14} className="text-indigo-500 shrink-0" strokeWidth={3} />}
                 </div>
+              
+                {/* 下半部分：类型与测速 */}
                 <div className="flex items-center justify-between w-full mt-1 pt-1 border-t border-slate-200/50 dark:border-slate-700/50 border-dashed transition-colors">
                   <span className={cn('text-[10px] font-mono font-medium tracking-wide uppercase truncate pr-1', isMissingDetail ? 'text-amber-500 dark:text-amber-400' : 'text-slate-400 dark:text-slate-500')}>
                     {nodeType}
                   </span>
+
+                  {/* 测速按钮：现在它可以在任何情况下点击 */}
                   <div
-                    className={cn('text-[10px] font-mono font-bold bg-slate-100/80 dark:bg-slate-800 px-1.5 py-0.5 rounded transition-all cursor-pointer shrink-0 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95', style.text)}
-                    onClick={e => onTestGroup(e, groupName, [node.name])}
+                    className={cn(
+                      'text-[10px] font-mono font-bold bg-slate-100/80 dark:bg-slate-800 px-1.5 py-0.5 rounded transition-all cursor-pointer shrink-0 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95', 
+                      style.text
+                    )}
+                    onClick={e => {
+                      e.stopPropagation();
+                      onTestGroup(e, groupName, [node.name]);
+                    }}
                     title="点击测速"
                   >
                     {isNodeTesting ? '...' : (ms ? `${ms} ms` : '-')}
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

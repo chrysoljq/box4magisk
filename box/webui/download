@@ -155,7 +155,49 @@ cmd_download_cores() {
     start_async_job "download-cores" "download-cores" "$@"
 }
 
+download_requested_core() {
+    local core="$1"
+    local tmp_dir="$2"
+    local sing_box_arch="$3"
+    local mihomo_arch="$4"
+    local xray_arch="$5"
+    local result_file="$6"
+    local asset=""
+
+    case "$core" in
+        sing-box)
+            if asset="$(download_sing_box_core "$tmp_dir" "$sing_box_arch" "${box_path}/bin/sing-box" 2>/dev/null)"; then
+                record_core_download_status "$result_file" "sing-box" "ok" "$asset" "installed"
+                return 0
+            fi
+            record_download_result "$result_file" "sing-box" "error" "" "download failed"
+            return 1
+            ;;
+        mihomo)
+            if asset="$(download_mihomo_core "$tmp_dir" "$mihomo_arch" "${box_path}/bin/mihomo" 2>/dev/null)"; then
+                record_core_download_status "$result_file" "mihomo" "ok" "$asset" "installed"
+                return 0
+            fi
+            record_download_result "$result_file" "mihomo" "error" "" "download failed"
+            return 1
+            ;;
+        xray)
+            if asset="$(download_xray_core "$tmp_dir" "$xray_arch" "${box_path}/bin/xray" "${box_path}/xray" 2>/dev/null)"; then
+                record_core_download_status "$result_file" "xray" "ok" "$asset" "installed"
+                return 0
+            fi
+            record_download_result "$result_file" "xray" "error" "" "download failed"
+            return 1
+            ;;
+        *)
+            emit_error "unsupported downloadable core: $core" "download-cores"
+            ;;
+    esac
+}
+
 cmd_sync_download_cores() {
+    local requested_core="$1"
+
     source_box_config
 
     local arch_map sing_box_arch mihomo_arch xray_arch tmp_dir result_file
@@ -172,28 +214,30 @@ cmd_sync_download_cores() {
     : > "$result_file"
     trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
-    if asset="$(download_sing_box_core "$tmp_dir" "$sing_box_arch" "${box_path}/bin/sing-box" 2>/dev/null)"; then
-        record_core_download_status "$result_file" "sing-box" "ok" "$asset" "installed"
-        ok_count=$((ok_count + 1))
+    if [ -n "$requested_core" ]; then
+        if download_requested_core "$requested_core" "$tmp_dir" "$sing_box_arch" "$mihomo_arch" "$xray_arch" "$result_file"; then
+            ok_count=1
+        else
+            fail_count=1
+        fi
     else
-        record_download_result "$result_file" "sing-box" "error" "" "download failed"
-        fail_count=$((fail_count + 1))
-    fi
+        if download_requested_core "sing-box" "$tmp_dir" "$sing_box_arch" "$mihomo_arch" "$xray_arch" "$result_file"; then
+            ok_count=$((ok_count + 1))
+        else
+            fail_count=$((fail_count + 1))
+        fi
 
-    if asset="$(download_mihomo_core "$tmp_dir" "$mihomo_arch" "${box_path}/bin/mihomo" 2>/dev/null)"; then
-        record_core_download_status "$result_file" "mihomo" "ok" "$asset" "installed"
-        ok_count=$((ok_count + 1))
-    else
-        record_download_result "$result_file" "mihomo" "error" "" "download failed"
-        fail_count=$((fail_count + 1))
-    fi
+        if download_requested_core "mihomo" "$tmp_dir" "$sing_box_arch" "$mihomo_arch" "$xray_arch" "$result_file"; then
+            ok_count=$((ok_count + 1))
+        else
+            fail_count=$((fail_count + 1))
+        fi
 
-    if asset="$(download_xray_core "$tmp_dir" "$xray_arch" "${box_path}/bin/xray" "${box_path}/xray" 2>/dev/null)"; then
-        record_core_download_status "$result_file" "xray" "ok" "$asset" "installed"
-        ok_count=$((ok_count + 1))
-    else
-        record_download_result "$result_file" "xray" "error" "" "download failed"
-        fail_count=$((fail_count + 1))
+        if download_requested_core "xray" "$tmp_dir" "$sing_box_arch" "$mihomo_arch" "$xray_arch" "$result_file"; then
+            ok_count=$((ok_count + 1))
+        else
+            fail_count=$((fail_count + 1))
+        fi
     fi
 
     while IFS='|' read -r core status asset message; do

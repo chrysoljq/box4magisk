@@ -57,7 +57,7 @@ cmd_run_job() {
 }
 
 cmd_help() {
-    emit_ok "help" '["status","get-config","set-config KEY [VALUE]","set-number KEY VALUE","toggle KEY 0|1","service start|stop|restart|status","tproxy start|stop|restart|status","manual-mode [status|enable|disable]","check-log [LINES]","apps","set-apps whitelist|blacklist|disable [LIST]","mihomo-panel-url [HOST] [PORT] [SECRET] [http|https]","mihomo-subscriptions","mihomo-subscription-add NAME URL","mihomo-subscription-update CURRENT_NAME NEXT_NAME URL","mihomo-subscription-remove NAME","singbox-subscriptions","singbox-subscription-views","singbox-subscription-add NAME URL","singbox-subscription-update CURRENT_NAME NEXT_NAME URL","singbox-subscription-remove NAME","download-cores","job-status JOB_ID","capabilities"]'
+    emit_ok "help" '["status","get-config","set-config KEY [VALUE]","set-number KEY VALUE","toggle KEY 0|1","service start|stop|restart|status","tproxy start|stop|restart|status","manual-mode [status|enable|disable]","check-log [LINES]","apps","set-apps whitelist|blacklist|disable [LIST]","mihomo-panel-url [HOST] [PORT] [SECRET] [http|https]","mihomo-subscriptions","mihomo-subscription-add NAME URL","mihomo-subscription-update CURRENT_NAME NEXT_NAME URL","mihomo-subscription-remove NAME","singbox-subscriptions","singbox-subscription-views","singbox-subscription-add NAME URL","singbox-subscription-update CURRENT_NAME NEXT_NAME URL","singbox-subscription-remove NAME","download-cores [sing-box|mihomo|xray]","job-status JOB_ID","capabilities"]'
 }
 
 # ── 路由分发 ──
