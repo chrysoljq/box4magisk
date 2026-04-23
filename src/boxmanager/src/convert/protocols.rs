@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, Context};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -7,8 +7,9 @@ use crate::ProxyNode;
 use super::tls::{build_optional_tls, build_required_tls};
 use super::transport::build_transport;
 use super::{
-    first_string, first_u64, map_get_csv, map_get_csv_numbers, map_get_string,
-    map_get_u64, optional_bool, optional_string, required_string, required_u64,
+    first_string, first_u64, map_get_csv, map_get_csv_numbers, map_get_mapping,
+    map_get_string, map_get_u64, optional_bool, optional_string, required_string,
+    required_u64,
 };
 
 #[derive(Debug, Serialize)]
@@ -25,6 +26,10 @@ struct ShadowsocksOutbound {
     server_port: u64,
     method: String,
     password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_opts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     detour: Option<String>,
 }
@@ -181,24 +186,35 @@ pub(super) fn convert_node(node: &ProxyNode, warnings: &mut Vec<String>) -> Resu
             ));
             Ok(None)
         }
-        "ss" => convert_ss(node),
-        "vmess" => convert_vmess(node),
-        "vless" => convert_vless(node),
-        "trojan" => convert_trojan(node),
-        "socks5" | "socks" => convert_socks(node),
-        "http" => convert_http(node),
-        "wireguard" => convert_wireguard(node),
-        "hysteria2" => convert_hysteria2(node),
-        "hy2" => convert_hysteria2(node),
-        "anytls" => convert_anytls(node),
+        "ss" => convert_ss(node, warnings).with_context(|| format!("failed to convert shadowsocks node `{}`", node.name)),
+        "vmess" => convert_vmess(node).with_context(|| format!("failed to convert vmess node `{}`", node.name)),
+        "vless" => convert_vless(node).with_context(|| format!("failed to convert vless node `{}`", node.name)),
+        "trojan" => convert_trojan(node).with_context(|| format!("failed to convert trojan node `{}`", node.name)),
+        "socks5" | "socks" => convert_socks(node).with_context(|| format!("failed to convert socks node `{}`", node.name)),
+        "http" => convert_http(node).with_context(|| format!("failed to convert http node `{}`", node.name)),
+        "wireguard" => convert_wireguard(node).with_context(|| format!("failed to convert wireguard node `{}`", node.name)),
+        "hysteria2" | "hy2" => convert_hysteria2(node).with_context(|| format!("failed to convert hysteria2 node `{}`", node.name)),
+        "anytls" => convert_anytls(node).with_context(|| format!("failed to convert anytls node `{}`", node.name)),
         other => bail!("protocol `{other}` is not supported yet"),
     }
 }
 
-fn convert_ss(node: &ProxyNode) -> Result<Option<Value>> {
-    if map_get_string(&node.data, "plugin").is_some() {
-        bail!("shadowsocks plugin is not supported in this version");
-    }
+fn convert_ss(node: &ProxyNode, warnings: &mut Vec<String>) -> Result<Option<Value>> {
+    // TODO: ShadowTLS support — requires a dedicated struct with nested tls config,
+    // version/handshake fields, etc. Not a simple plugin_opts passthrough.
+    let (plugin, plugin_opts) = match map_get_string(&node.data, "plugin") {
+        Some(raw) => {
+            if let Some(opts_map) = map_get_mapping(&node.data, "plugin-opts") {
+                (Some(raw), Some(yaml_mapping_to_opts(opts_map, &node.name, warnings)))
+            } else if let Some((name, opts)) = raw.split_once(';') {
+                (Some(name.to_string()), Some(opts.to_string()))
+            } else {
+                (Some(raw), None)
+            }
+        }
+        None => (None, None),
+    };
+
     let outbound = ShadowsocksOutbound {
         r#type: "shadowsocks".to_string(),
         tag: node.name.clone(),
@@ -206,9 +222,32 @@ fn convert_ss(node: &ProxyNode) -> Result<Option<Value>> {
         server_port: required_u64(&node.data, "port")?,
         method: first_string(&node.data, &["cipher", "method"])?,
         password: required_string(&node.data, "password")?,
+        plugin,
+        plugin_opts,
         detour: map_get_string(&node.data, "dialer-proxy"),
     };
     Ok(Some(serde_json::to_value(outbound)?))
+}
+
+fn yaml_mapping_to_opts(map: &serde_yaml::Mapping, node_name: &str, warnings: &mut Vec<String>) -> String {
+    map.iter()
+        .filter_map(|(k, v)| {
+            let key = k.as_str()?;
+            let value = match v {
+                serde_yaml::Value::String(s) => s.clone(),
+                serde_yaml::Value::Bool(b) => b.to_string(),
+                serde_yaml::Value::Number(n) => n.to_string(),
+                _ => {
+                    warnings.push(format!(
+                        "shadowsocks plugin option `{key}` in node `{node_name}` has an unsupported type and was skipped"
+                    ));
+                    return None;
+                }
+            };
+            Some(format!("{key}={value}"))
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn convert_vmess(node: &ProxyNode) -> Result<Option<Value>> {
