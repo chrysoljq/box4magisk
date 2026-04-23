@@ -8,14 +8,30 @@ use super::{
     map_get_bool, map_get_mapping, map_get_string, map_get_string_list, object, required_string,
 };
 
+fn is_false(b: &bool) -> bool {
+    !(*b)
+}
+
+fn get_first_string(data: &serde_yaml::Mapping, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|&k| map_get_string(data, k))
+}
+
+fn get_first_string_list(data: &serde_yaml::Mapping, keys: &[&str]) -> Option<Vec<String>> {
+    keys.iter().find_map(|&k| map_get_string_list(data, k))
+}
+
+fn get_first_bool(data: &serde_yaml::Mapping, keys: &[&str]) -> bool {
+    keys.iter().any(|&k| map_get_bool(data, k))
+}
+
 #[derive(Debug, Serialize)]
 struct TlsConfig {
     enabled: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "is_false")]
     disable_sni: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     server_name: Option<String>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "is_false")]
     insecure: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     alpn: Option<Vec<String>>,
@@ -73,40 +89,35 @@ pub(super) fn build_optional_tls(node: &ProxyNode) -> Result<Option<Map<String, 
 }
 
 pub(super) fn build_required_tls(node: &ProxyNode) -> Result<Map<String, Value>> {
+    build_tls_from_data(&node.data, None)
+}
+
+fn build_tls_from_data(
+    data: &serde_yaml::Mapping,
+    sni_override: Option<&str>, // 移除了无用的 &serde_yaml::Mapping 引用
+) -> Result<Map<String, Value>> {
     let config = TlsConfig {
         enabled: true,
-        disable_sni: map_get_bool(&node.data, "disable-sni")
-            || map_get_bool(&node.data, "disable_sni"),
-        server_name: map_get_string(&node.data, "servername")
-            .or_else(|| map_get_string(&node.data, "sni")),
-        insecure: map_get_bool(&node.data, "skip-cert-verify"),
-        alpn: map_get_string_list(&node.data, "alpn"),
-        min_version: map_get_string(&node.data, "tls-min-version")
-            .or_else(|| map_get_string(&node.data, "min_version")),
-        max_version: map_get_string(&node.data, "tls-max-version")
-            .or_else(|| map_get_string(&node.data, "max_version")),
-        cipher_suites: map_get_string_list(&node.data, "cipher-suites")
-            .or_else(|| map_get_string_list(&node.data, "cipher_suites")),
-        curve_preferences: map_get_string_list(&node.data, "curve-preferences")
-            .or_else(|| map_get_string_list(&node.data, "curve_preferences")),
-        certificate: map_get_string(&node.data, "certificate"),
-        certificate_path: map_get_string(&node.data, "certificate-path")
-            .or_else(|| map_get_string(&node.data, "certificate_path")),
-        certificate_public_key_sha256: map_get_string_list(
-            &node.data,
-            "certificate-public-key-sha256",
-        )
-        .or_else(|| map_get_string_list(&node.data, "certificate_public_key_sha256")),
-        client_certificate: map_get_string_list(&node.data, "client-certificate")
-            .or_else(|| map_get_string_list(&node.data, "client_certificate")),
-        client_certificate_path: map_get_string(&node.data, "client-certificate-path")
-            .or_else(|| map_get_string(&node.data, "client_certificate_path")),
-        client_key: map_get_string_list(&node.data, "client-key")
-            .or_else(|| map_get_string_list(&node.data, "client_key")),
-        client_key_path: map_get_string(&node.data, "client-key-path")
-            .or_else(|| map_get_string(&node.data, "client_key_path")),
-        utls: build_utls(node),
-        reality: build_reality(node)?,
+        // 使用辅助函数大幅简化了中划线/下划线兼容的样板代码
+        disable_sni: get_first_bool(data, &["disable-sni", "disable_sni"]),
+        server_name: sni_override
+            .map(|sni| sni.to_string())
+            .or_else(|| get_first_string(data, &["servername", "sni"])),
+        insecure: map_get_bool(data, "skip-cert-verify"),
+        alpn: map_get_string_list(data, "alpn"),
+        min_version: get_first_string(data, &["tls-min-version", "min_version"]),
+        max_version: get_first_string(data, &["tls-max-version", "max_version"]),
+        cipher_suites: get_first_string_list(data, &["cipher-suites", "cipher_suites"]),
+        curve_preferences: get_first_string_list(data, &["curve-preferences", "curve_preferences"]),
+        certificate: map_get_string(data, "certificate"),
+        certificate_path: get_first_string(data, &["certificate-path", "certificate_path"]),
+        certificate_public_key_sha256: get_first_string_list(data, &["certificate-public-key-sha256", "certificate_public_key_sha256"]),
+        client_certificate: get_first_string_list(data, &["client-certificate", "client_certificate"]),
+        client_certificate_path: get_first_string(data, &["client-certificate-path", "client_certificate_path"]),
+        client_key: get_first_string_list(data, &["client-key", "client_key"]),
+        client_key_path: get_first_string(data, &["client-key-path", "client_key_path"]),
+        utls: build_utls_from_data(data),
+        reality: build_reality_from_data(data)?,
     };
 
     let value = serde_json::to_value(config)?;
@@ -116,15 +127,15 @@ pub(super) fn build_required_tls(node: &ProxyNode) -> Result<Map<String, Value>>
         .unwrap_or_else(|| object(Vec::new())))
 }
 
-fn build_utls(node: &ProxyNode) -> Option<TlsUtlsConfig> {
-    map_get_string(&node.data, "client-fingerprint").map(|fingerprint| TlsUtlsConfig {
+fn build_utls_from_data(data: &serde_yaml::Mapping) -> Option<TlsUtlsConfig> {
+    map_get_string(data, "client-fingerprint").map(|fingerprint| TlsUtlsConfig {
         enabled: true,
         fingerprint,
     })
 }
 
-fn build_reality(node: &ProxyNode) -> Result<Option<TlsRealityConfig>> {
-    let Some(reality) = map_get_mapping(&node.data, "reality-opts") else {
+fn build_reality_from_data(data: &serde_yaml::Mapping) -> Result<Option<TlsRealityConfig>> {
+    let Some(reality) = map_get_mapping(data, "reality-opts") else {
         return Ok(None);
     };
 

@@ -26,6 +26,7 @@ pub(super) fn parse_uri_node(line: &str) -> Result<ProxyNode> {
         || lower.starts_with("hy2://")
         || lower.starts_with("wireguard://")
         || lower.starts_with("wg://")
+        || lower.starts_with("anytls://")
     {
         return parse_standard_uri(line);
     }
@@ -67,7 +68,7 @@ fn parse_standard_uri(line: &str) -> Result<ProxyNode> {
                 query_value(&url, "encryption").as_deref().unwrap_or("none"),
             );
         }
-        "trojan" | "hysteria2" => {
+        "trojan" | "hysteria2" | "anytls" => {
             set_string(&mut data, "password", url.username());
             set_bool(&mut data, "tls", true);
         }

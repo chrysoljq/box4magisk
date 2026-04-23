@@ -7,7 +7,7 @@ use crate::ProxyNode;
 use super::tls::{build_optional_tls, build_required_tls};
 use super::transport::build_transport;
 use super::{
-    first_string, first_u64, map_get_csv, map_get_csv_numbers, map_get_mapping, map_get_string,
+    first_string, first_u64, map_get_csv, map_get_csv_numbers, map_get_string,
     map_get_u64, optional_bool, optional_string, required_string, required_u64,
 };
 
@@ -133,6 +133,24 @@ struct WireguardOutbound {
 }
 
 #[derive(Debug, Serialize)]
+struct AnyTlsOutbound {
+    r#type: String,
+    tag: String,
+    server: String,
+    server_port: u64,
+    password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detour: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idle_session_check_interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idle_session_timeout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_idle_session: Option<u64>,
+    tls: Map<String, Value>,
+}
+
+#[derive(Debug, Serialize)]
 struct Hysteria2Outbound {
     r#type: String,
     tag: String,
@@ -172,15 +190,14 @@ pub(super) fn convert_node(node: &ProxyNode, warnings: &mut Vec<String>) -> Resu
         "wireguard" => convert_wireguard(node),
         "hysteria2" => convert_hysteria2(node),
         "hy2" => convert_hysteria2(node),
+        "anytls" => convert_anytls(node),
         other => bail!("protocol `{other}` is not supported yet"),
     }
 }
 
 fn convert_ss(node: &ProxyNode) -> Result<Option<Value>> {
-    if map_get_string(&node.data, "plugin").is_some()
-        || map_get_mapping(&node.data, "plugin-opts").is_some()
-    {
-        bail!("shadowsocks plugin is not supported in this first version");
+    if map_get_string(&node.data, "plugin").is_some() {
+        bail!("shadowsocks plugin is not supported in this version");
     }
     let outbound = ShadowsocksOutbound {
         r#type: "shadowsocks".to_string(),
@@ -287,6 +304,25 @@ fn convert_wireguard(node: &ProxyNode) -> Result<Option<Value>> {
             .or_else(|| map_get_string(&node.data, "pre_shared_key")),
         reserved: map_get_csv_numbers(&node.data, "reserved"),
         mtu: map_get_u64(&node.data, "mtu"),
+    };
+
+    Ok(Some(serde_json::to_value(outbound)?))
+}
+
+fn convert_anytls(node: &ProxyNode) -> Result<Option<Value>> {
+    let outbound = AnyTlsOutbound {
+        r#type: "anytls".to_string(),
+        tag: node.name.clone(),
+        server: required_string(&node.data, "server")?,
+        server_port: required_u64(&node.data, "port")?,
+        password: required_string(&node.data, "password")?,
+        detour: map_get_string(&node.data, "dialer-proxy"),
+        idle_session_check_interval: map_get_u64(&node.data, "idle-session-check-interval")
+            .map(|v| format!("{v}s")),
+        idle_session_timeout: map_get_u64(&node.data, "idle-session-timeout")
+            .map(|v| format!("{v}s")),
+        min_idle_session: map_get_u64(&node.data, "min-idle-session"),
+        tls: build_required_tls(node)?,
     };
 
     Ok(Some(serde_json::to_value(outbound)?))
