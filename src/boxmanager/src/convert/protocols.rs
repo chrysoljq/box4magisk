@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 use crate::ProxyNode;
 
 use super::tls::{build_optional_tls, build_required_tls};
-use super::transport::build_transport;
+use super::transport::{build_multiplex, build_transport};
 use super::{
     first_string, first_u64, map_get_csv, map_get_csv_numbers, map_get_mapping,
     map_get_string, map_get_u64, optional_bool, optional_string, required_string,
@@ -32,6 +32,8 @@ struct ShadowsocksOutbound {
     plugin_opts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     detour: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +52,8 @@ struct VmessOutbound {
     transport: Option<Map<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +71,10 @@ struct VlessOutbound {
     transport: Option<Map<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    packet_encoding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,6 +92,8 @@ struct TrojanOutbound {
     transport: Option<Map<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +109,8 @@ struct SocksOutbound {
     username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +127,8 @@ struct HttpOutbound {
     password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -153,6 +167,8 @@ struct AnyTlsOutbound {
     #[serde(skip_serializing_if = "Option::is_none")]
     min_idle_session: Option<u64>,
     tls: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplex: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -225,6 +241,7 @@ fn convert_ss(node: &ProxyNode, warnings: &mut Vec<String>) -> Result<Option<Val
         plugin,
         plugin_opts,
         detour: map_get_string(&node.data, "dialer-proxy"),
+        multiplex: build_multiplex(node),
     };
     Ok(Some(serde_json::to_value(outbound)?))
 }
@@ -262,6 +279,7 @@ fn convert_vmess(node: &ProxyNode) -> Result<Option<Value>> {
         detour: map_get_string(&node.data, "dialer-proxy"),
         transport: build_transport(node)?,
         tls: build_optional_tls(node)?,
+        multiplex: build_multiplex(node),
     };
 
     Ok(Some(serde_json::to_value(outbound)?))
@@ -278,6 +296,8 @@ fn convert_vless(node: &ProxyNode) -> Result<Option<Value>> {
         detour: map_get_string(&node.data, "dialer-proxy"),
         transport: build_transport(node)?,
         tls: build_optional_tls(node)?,
+        packet_encoding: map_get_string(&node.data, "packet-encoding"),
+        multiplex: build_multiplex(node),
     };
 
     Ok(Some(serde_json::to_value(outbound)?))
@@ -294,6 +314,7 @@ fn convert_trojan(node: &ProxyNode) -> Result<Option<Value>> {
         detour: map_get_string(&node.data, "dialer-proxy"),
         transport: build_transport(node)?,
         tls: build_optional_tls(node)?,
+        multiplex: build_multiplex(node),
     };
 
     Ok(Some(serde_json::to_value(outbound)?))
@@ -309,6 +330,7 @@ fn convert_socks(node: &ProxyNode) -> Result<Option<Value>> {
         detour: map_get_string(&node.data, "dialer-proxy"),
         username: map_get_string(&node.data, "username"),
         password: map_get_string(&node.data, "password"),
+        multiplex: build_multiplex(node),
     };
 
     Ok(Some(serde_json::to_value(outbound)?))
@@ -324,6 +346,7 @@ fn convert_http(node: &ProxyNode) -> Result<Option<Value>> {
         username: map_get_string(&node.data, "username"),
         password: map_get_string(&node.data, "password"),
         tls: build_optional_tls(node)?,
+        multiplex: build_multiplex(node),
     };
 
     Ok(Some(serde_json::to_value(outbound)?))
@@ -362,6 +385,7 @@ fn convert_anytls(node: &ProxyNode) -> Result<Option<Value>> {
             .map(|v| format!("{v}s")),
         min_idle_session: map_get_u64(&node.data, "min-idle-session"),
         tls: build_required_tls(node)?,
+        multiplex: build_multiplex(node),
     };
 
     Ok(Some(serde_json::to_value(outbound)?))

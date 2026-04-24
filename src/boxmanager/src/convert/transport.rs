@@ -4,7 +4,10 @@ use serde_json::{Map, Value};
 
 use crate::ProxyNode;
 
-use super::{map_get_json_map, map_get_mapping, map_get_string, map_get_string_list, object};
+use super::{
+    map_get_bool, map_get_json_map, map_get_mapping, map_get_string, map_get_string_list,
+    map_get_u64, object,
+};
 
 #[derive(Debug, Serialize)]
 struct WsTransport {
@@ -113,4 +116,63 @@ fn build_http_transport(node: &ProxyNode) -> HttpTransport {
         host,
         path,
     }
+}
+
+#[derive(Debug, Serialize)]
+struct MultiplexBrutalConfig {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    up_mbps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    down_mbps: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct MultiplexConfig {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_connections: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_streams: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_streams: Option<u64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    padding: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brutal: Option<MultiplexBrutalConfig>,
+}
+
+pub(super) fn build_multiplex(node: &ProxyNode) -> Option<Map<String, Value>> {
+    let smux = map_get_mapping(&node.data, "smux")?;
+    if !map_get_bool(smux, "enabled") {
+        return None;
+    }
+
+    let brutal = map_get_mapping(smux, "brutal-opts").and_then(|opts| {
+        if map_get_bool(opts, "enabled") {
+            Some(MultiplexBrutalConfig {
+                enabled: true,
+                up_mbps: map_get_u64(opts, "up"),
+                down_mbps: map_get_u64(opts, "down"),
+            })
+        } else {
+            None
+        }
+    });
+
+    let config = MultiplexConfig {
+        enabled: true,
+        protocol: map_get_string(smux, "protocol"),
+        max_connections: map_get_u64(smux, "max-connections"),
+        min_streams: map_get_u64(smux, "min-streams"),
+        max_streams: map_get_u64(smux, "max-streams"),
+        padding: map_get_bool(smux, "padding"),
+        brutal,
+    };
+
+    serde_json::to_value(config)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
 }

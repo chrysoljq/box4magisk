@@ -98,7 +98,6 @@ fn build_tls_from_data(
 ) -> Result<Map<String, Value>> {
     let config = TlsConfig {
         enabled: true,
-        // 使用辅助函数大幅简化了中划线/下划线兼容的样板代码
         disable_sni: get_first_bool(data, &["disable-sni", "disable_sni"]),
         server_name: sni_override
             .map(|sni| sni.to_string())
